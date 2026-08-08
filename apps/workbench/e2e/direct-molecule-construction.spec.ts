@@ -26,8 +26,29 @@ function visibleKetcherControl(editor: Locator, testId: string): Locator {
   return editor.locator(`[data-testid="${testId}"]:visible`).last();
 }
 
-async function enterStudentWorkbench(page: Page) {
+async function enterStudentWorkbench(
+  page: Page,
+  activityTemplateIds?: string[],
+) {
   await mockClassroomApis(page);
+  if (activityTemplateIds) {
+    await page.route('**/api/join-classroom', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ok: true,
+          status: 'joined',
+          classCode: E2E_CLASS_CODE,
+          activityTemplateIds,
+          studentMessage:
+            '수업코드 확인이 완료되었습니다. 활동 결과를 서버 제출함에 보낼 수 있습니다.',
+          developerMessage:
+            'Direct construction E2E joinClassroom mock joined.',
+        }),
+      });
+    });
+  }
   await page.goto('/');
   await page.getByTestId('ethics-guide-confirm-checkbox').check();
   await page.getByTestId('ethics-guide-start-button').click();
@@ -91,7 +112,7 @@ function getChainStart(box: {
 
 async function selectKetcherTool(
   page: Page,
-  testId: 'C-button' | 'bonds' | 'chain',
+  testId: 'C-button' | 'H-button' | 'bonds' | 'chain',
   inputMethod: 'mouse' | 'touch' = 'mouse',
 ) {
   const editor = page.getByTestId('chemical-editor');
@@ -119,6 +140,39 @@ async function placeCarbon(
     await canvas.tap({ position: point });
   } else {
     await canvas.click({ position: point });
+  }
+}
+
+async function drawExplicitHydrogenMethaneWithMouse(page: Page) {
+  const { canvas, box } = await getCanvas(page);
+  const center = {
+    x: box.width * 0.5,
+    y: box.height * 0.5,
+  };
+  const hydrogens = [
+    { x: center.x - 80, y: center.y },
+    { x: center.x + 80, y: center.y },
+    { x: center.x, y: center.y - 80 },
+    { x: center.x, y: center.y + 80 },
+  ];
+
+  await selectKetcherTool(page, 'C-button');
+  await canvas.click({ position: center });
+  await selectKetcherTool(page, 'H-button');
+
+  for (const hydrogen of hydrogens) {
+    await canvas.click({ position: hydrogen });
+  }
+
+  await selectKetcherTool(page, 'bonds');
+
+  for (const hydrogen of hydrogens) {
+    await page.mouse.move(box.x + center.x, box.y + center.y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + hydrogen.x, box.y + hydrogen.y, {
+      steps: 8,
+    });
+    await page.mouse.up();
   }
 }
 
@@ -306,6 +360,100 @@ async function expectGraphSummary(
 }
 
 test.describe('Ketcher direct molecule construction', () => {
+  test('mouse analyzes explicit-hydrogen methane without a false MOL/SMILES mismatch', async ({
+    page,
+  }) => {
+    await enterStudentWorkbench(page, ['draw-methane']);
+    await page.getByTestId('activity-template-draw-methane').click();
+    await expect(page.getByTestId('student-example-select')).toHaveValue(
+      'methane',
+    );
+    await drawExplicitHydrogenMethaneWithMouse(page);
+    await analyzeStructure(page, 'valid');
+    await expectGraphSummary(page, {
+      atoms: 5,
+      bonds: 4,
+      components: 1,
+      status: 'single-component',
+    });
+    await expect(page.getByTestId('student-formula-output')).toHaveText('CH4');
+    await expect(page.getByTestId('student-molecular-weight-output')).toHaveText(
+      '16.043',
+    );
+    await expect(page.getByTestId('student-central-atom-output')).toHaveText(
+      'C1',
+    );
+    await expect(
+      page.getByTestId('student-electron-domain-count-output'),
+    ).toHaveText('4개');
+    await expect(page.getByTestId('student-electron-geometry-output')).toHaveText(
+      '정사면체',
+    );
+    await expect(page.getByTestId('student-molecular-shape-output')).toHaveText(
+      '정사면체',
+    );
+    await expect(
+      page.getByText(
+        '편집기에서 가져온 두 구조 데이터가 서로 일치하지 않아 구조 검토가 필요합니다. 구조를 다시 불러오거나 다시 그린 뒤 확인해 주세요.',
+        { exact: true },
+      ),
+    ).toHaveCount(0);
+
+    await page.getByTestId('show-vsepr-model-button').click();
+    await expect(page.getByTestId('student-activity-shell')).toHaveAttribute(
+      'data-active-step',
+      '4',
+    );
+
+    const vseprModelViewer = page.getByTestId('vsepr-3d-model-viewer');
+    const molecule3DViewer = page.getByTestId('molecule-3d-viewer');
+
+    await expect(vseprModelViewer).toHaveAttribute(
+      'data-viewer-status',
+      'ready',
+    );
+    await expect(vseprModelViewer).toHaveAttribute(
+      'data-model-rendered',
+      'true',
+    );
+    await expect(molecule3DViewer).toHaveAttribute(
+      'data-viewer-status',
+      'ready',
+    );
+    await expect(molecule3DViewer).toHaveAttribute(
+      'data-model-rendered',
+      'true',
+    );
+
+    for (const hostTestId of ['vsepr-3d-host', 'viewer-3d']) {
+      const canvas = page.getByTestId(hostTestId).locator('canvas');
+
+      await expect(canvas).toHaveCount(1);
+      await expect
+        .poll(async () => {
+          const [box, dimensions] = await Promise.all([
+            canvas.boundingBox(),
+            canvas.evaluate((element) => {
+              const renderedCanvas = element as HTMLCanvasElement;
+              return {
+                width: renderedCanvas.width,
+                height: renderedCanvas.height,
+              };
+            }),
+          ]);
+
+          return Boolean(
+            box &&
+              box.width > 0 &&
+              box.height > 0 &&
+              dimensions.width > 0 &&
+              dimensions.height > 0,
+          );
+        })
+        .toBe(true);
+    }
+  });
+
   test('mouse constructs carbon, C4, a branch, undo/redo, and clear with graph evidence', async ({
     page,
   }) => {

@@ -5,6 +5,7 @@ import type {
   MoleculeValidationResult,
   Molecule3DStructureMatchStatus,
 } from '../types/molecule';
+import { validateMoleculeInput } from './rdkitService';
 
 type PubChemPropertyRecord = {
   CID?: number;
@@ -25,6 +26,11 @@ type PubChemPropertyResponse = {
 
 const PUBCHEM_PROPERTY_ENDPOINT =
   'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/smiles/property/Title,MolecularFormula,MolecularWeight,CanonicalSMILES,IsomericSMILES/JSON';
+const DEFAULT_PUBCHEM_TIMEOUT_MS = 15_000;
+
+type PubChemRequestOptions = {
+  timeoutMs?: number;
+};
 
 type PubChemResolvedMatchStatus = Exclude<
   PubChemMatchStatus,
@@ -332,9 +338,102 @@ export function evaluatePubChemCandidateForCurrentStructure(
   };
 }
 
+/**
+ * Re-checks string-mismatched PubChem candidate metadata with the same RDKit
+ * validation path used for the current drawing.
+ *
+ * The legacy synchronous evaluator remains the fast path and keeps its public
+ * contract. Only representation-level structure mismatches are retried here;
+ * missing evidence, formula conflicts, and stereochemistry conflicts remain
+ * fail-closed.
+ */
+export async function evaluatePubChemCandidateWithRdkitForCurrentStructure(
+  candidate: PubChemCandidate,
+  validationResult: MoleculeValidationResult | null,
+): Promise<ReturnType<typeof evaluatePubChemCandidateForCurrentStructure>> {
+  const preliminary = evaluatePubChemCandidateForCurrentStructure(
+    candidate,
+    validationResult,
+  );
+
+  if (preliminary.canLoad3D || validationResult?.ok !== true) {
+    return preliminary;
+  }
+
+  const isRepresentationMismatch =
+    preliminary.developerLogs.includes(
+      'candidate blocked: canonical SMILES mismatch.',
+    ) ||
+    preliminary.developerLogs.includes(
+      'candidate blocked: structure identifiers did not verify current structure.',
+    );
+
+  if (!isRepresentationMismatch) {
+    return preliminary;
+  }
+
+  const candidateStructureSmiles =
+    candidate.isomericSmiles?.trim() || candidate.canonicalSmiles?.trim();
+
+  if (!candidateStructureSmiles) {
+    return preliminary;
+  }
+
+  const candidateValidation = await validateMoleculeInput({
+    source: 'import',
+    validationStatus: 'unvalidated',
+    smiles: candidateStructureSmiles,
+    structureIntent: 'single-molecule',
+  });
+
+  if (!candidateValidation.ok) {
+    return {
+      ...preliminary,
+      studentMessage:
+        '선택한 외부 3D 자료 후보의 구조 식별값을 확인하지 못해 불러오기를 중단했습니다.',
+      warnings: [
+        '외부 자료 후보의 구조 문자열이 RDKit.js 구조 검증을 통과하지 못했습니다.',
+      ],
+      developerLogs: [
+        ...preliminary.developerLogs,
+        ...candidateValidation.developerLogs,
+        'candidate blocked: candidate SMILES failed shared RDKit validation.',
+      ],
+    };
+  }
+
+  if (candidateValidation.canonicalSmiles !== validationResult.canonicalSmiles) {
+    return {
+      ...preliminary,
+      developerLogs: [
+        ...preliminary.developerLogs,
+        ...candidateValidation.developerLogs,
+        `RDKit-normalized candidate canonicalSmiles: ${candidateValidation.canonicalSmiles}`,
+        'candidate blocked: RDKit-normalized canonical SMILES mismatch.',
+      ],
+    };
+  }
+
+  return {
+    canLoad3D: true,
+    structureMatchStatus: 'verified',
+    warnings: [
+      '외부 자료의 구조 표기는 달랐지만 RDKit.js로 정규화한 연결 구조가 현재 구조와 일치합니다.',
+    ],
+    developerLogs: [
+      ...candidateValidation.developerLogs,
+      `candidate CID: ${candidate.cid}`,
+      `RDKit current canonicalSmiles: ${validationResult.canonicalSmiles}`,
+      `RDKit-normalized candidate canonicalSmiles: ${candidateValidation.canonicalSmiles}`,
+      'candidate allowed: shared RDKit normalization verified the structure.',
+    ],
+  };
+}
+
 export async function searchPubChemCandidatesByCanonicalSmiles(
   canonicalSmiles: string,
   fetchImpl: typeof fetch = fetch,
+  requestOptions: PubChemRequestOptions = {},
 ): Promise<PubChemCandidateSearchResult> {
   const trimmedCanonicalSmiles = canonicalSmiles.trim();
 
@@ -351,6 +450,15 @@ export async function searchPubChemCandidatesByCanonicalSmiles(
     };
   }
 
+  const timeoutMs =
+    requestOptions.timeoutMs ?? DEFAULT_PUBCHEM_TIMEOUT_MS;
+  const abortController = new AbortController();
+  let didTimeout = false;
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    abortController.abort();
+  }, timeoutMs);
+
   try {
     const body = new URLSearchParams({ smiles: trimmedCanonicalSmiles }).toString();
     const response = await fetchImpl(PUBCHEM_PROPERTY_ENDPOINT, {
@@ -360,6 +468,7 @@ export async function searchPubChemCandidatesByCanonicalSmiles(
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body,
+      signal: abortController.signal,
     });
     const responseText = await response.text();
 
@@ -426,6 +535,10 @@ export async function searchPubChemCandidatesByCanonicalSmiles(
       ],
     };
   } catch (error) {
+    const wasAborted =
+      didTimeout ||
+      (error instanceof Error && error.name === 'AbortError');
+
     return {
       ok: false,
       status: 'error',
@@ -436,10 +549,19 @@ export async function searchPubChemCandidatesByCanonicalSmiles(
         'PubChem candidate search failed.',
         `canonicalSmiles: ${trimmedCanonicalSmiles}`,
         'endpoint type: compound/smiles/property',
+        ...(wasAborted
+          ? [
+              didTimeout
+                ? `request timeout: aborted after ${timeoutMs} ms.`
+                : 'request aborted before completion.',
+            ]
+          : []),
         `error message: ${
           error instanceof Error ? error.message : 'Unknown PubChem search error'
         }`,
       ],
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

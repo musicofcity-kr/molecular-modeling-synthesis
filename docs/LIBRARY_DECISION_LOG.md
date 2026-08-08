@@ -239,3 +239,53 @@ Superseded by the adoption decision below.
 - 라이선스/배포 영향: 새 의존성은 없다. RDKit BSD-3-Clause와 Ketcher Apache-2.0의 기존 라이선스 및 브라우저 정적 배포 경계가 유지된다.
 - 위험과 방어: RDKit JSON의 atom/bond 배열이 없거나 결합 인덱스가 범위를 벗어나면 fail-closed한다. canonical SMILES의 `.` 문자 검색은 연결성 판정 근거로 사용하지 않는다.
 - 검증: 빈 구조, 고립 원자, 분리 C4, 선형/분지/고리 C4, 이온성/혼합물 의도 단위 테스트와 실제 Ketcher canvas 마우스/터치 회귀를 유지한다.
+
+## 2026-07-29 — Ketcher 명시적 수소 구조의 RDKit 동등성 비교
+
+- 목적: Ketcher가 같은 메테인을 SMILES `C([H])([H])([H])[H]`와 명시적 수소 V2000(원자 5개·결합 4개)으로 내보낼 때, RDKit 파서의 수소 처리 차이 때문에 서로 다른 구조로 오판하지 않도록 한다.
+- 확인한 버전과 공개 API: `ketcher-core/react/standalone@3.15.0`의 `getSmiles()`·`getMolfile('v2000')`, `@rdkit/rdkit@2025.3.4-1.0.0`의 `get_mol(input, details_json?)`·`get_smiles()`·`remove_hs(details_json)`·`delete()`를 확인했다. 설치 타입 선언은 `remove_hs()` 무인자 형식만 제공하지만, 고정된 RDKit Release_2025_03_4의 `Code/MinimalLib/minilib.cpp`, `JSONParsers.cpp`, `Code/GraphMol/MolOps.h`에서 옵션 JSON 바인딩과 `RemoveHsParameters` 필드를 확인했다.
+- 원인: 동일 구조가 Molfile 기본 파싱에서는 `[H]C([H])([H])[H]`, SMILES 기본 파싱에서는 `C`가 되어 기존 canonical 문자열 완전일치 검사가 오탐했다. 원본 그래프 연결성은 5원자·4결합·1성분으로 이미 정상이다.
+- 구현 결정: 원본 Molfile RDKit 객체는 원자·결합·연결 성분·분자식·분자량·원자 주석의 근거로 그대로 유지한다. Ketcher가 MOL/SMILES 두 표현을 모두 제공한 경우에만 별도의 canonical 비교 키를 만든다.
+- 수소 정규화 정책: 일반 중성·비매핑 명시적 수소만 접는다. 동위원소, 원자 매핑, 수소화물, 쐐기 결합/입체 정의, 질의, 더미 원자 이웃, SGroup 및 수소만으로 된 구조는 보존하도록 `RemoveHsParameters`를 명시한다. 정규화 Molfile 재파싱은 `removeHs:false`로 수행한다.
+- 안전 게이트: 동위원소·라디칼·비영 전하의 기존 fail-closed 정책을 유지한다. 실제 에탄올/메테인 불일치와 반대 입체이성질체는 계속 차단한다. 모든 임시 `JSMol`은 `finally`에서 `delete()`한다.
+- 최종 canonical 결정: Ketcher 교차검사를 통과한 결과만 수소 정규화 canonical을 반환한다. 따라서 명시적-H 메테인의 검증 키는 `C`가 되어 예제/참고 3D 매칭과 일치한다. Ketcher 외 example/import 입력의 기존 canonical 정책은 변경하지 않는다.
+- 라이선스·배포 영향: 새 패키지를 추가하지 않았다. 기존 RDKit BSD-3-Clause와 Ketcher Apache-2.0 경계 및 브라우저 정적 배포 방식은 그대로다.
+- 테스트: 실제 Ketcher 명시적-H 메테인, 진짜 MOL/SMILES 불일치, 동위원소 H, 매핑 H, 같은/반대 입체화학, H₂ 보존을 RDKit 단위 테스트로 고정하고, 포인터로 C와 H 네 개를 직접 배치·결합한 Playwright 회귀에서 `CH4`, 5/4/1 그래프와 VSEPR 결과를 확인한다.
+
+## 2026-07-30 — 직접 그린 복잡한 분자의 수동 PubChem 3D 연결
+
+- 목적: 기본 예제 목록에 없는, Ketcher 2D 보드에서 직접 그린 복잡한 분자도 검증된 외부 좌표를 선택해 3Dmol.js로 확인할 수 있게 한다.
+- 공식 문서 확인: PubChem PUG-REST 문서(`https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest`)와 공식 튜토리얼(`https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest-tutorial`)에서 구조 검색, CID 기반 SDF 응답, `record_type=3d` 요청 경계를 확인했다.
+- 사용자 동작 경계: RDKit.js 검증만으로 외부 요청을 시작하지 않는다. 사용자가 3D 출력 동작을 명시적으로 클릭한 뒤에만 RDKit canonical SMILES로 후보를 검색한다. 편집 이벤트나 백그라운드 상태 변경은 숨은 검색을 발생시키지 않는다.
+- 후보 선택 결정: PubChem 후보가 한 개뿐이어도 자동 선택하지 않는다. 사용자가 후보를 직접 고른 뒤에만 선택 CID의 3D SDF를 요청한다.
+- 화학 안전 게이트: 후보 메타데이터 비교는 예비 게이트일 뿐이다. 내려받은 SDF를 RDKit.js로 다시 파싱하고, 현재 2D 구조의 검증 결과와 동일한 수소 정규화 exact-match 키가 확인될 때만 3Dmol.js에 전달한다. 이 재검증을 우회하지 않는다.
+- 실패 및 stale 정책: 네트워크 실패, 빈/비정상 응답, 3D 좌표 부재, 후보 또는 최종 SDF 불일치, 요청 중 구조 변경은 모두 fail-closed한다. 늦게 도착한 후보/SDF 응답은 현재 검증 키가 달라졌으면 폐기하며 기존 2D 구조는 보존한다.
+- 개인정보 경계: 외부 요청에는 구조 검색에 필요한 canonical SMILES 또는 선택 CID만 사용한다. 학생 이름, 학급 식별자, 학습 기록, 인증 토큰은 PubChem으로 보내지 않는다.
+- 라이선스·번들 영향: 새 패키지나 런타임 의존성을 추가하지 않았다. 기존 브라우저 `fetch`, RDKit.js, 3Dmol.js 경계를 재사용한다.
+- 결정: 명시적 클릭 → 수동 후보 선택 → 선택 CID `record_type=3d` SDF → RDKit 재검증 → exact-match 성공 시 출력하는 경로만 채택한다.
+
+## 2026-08-08 — Scanner N5 Scientific Reference 3D
+
+- 목적: N4에서 정확히 검증되고 제한 목록의 분자 1개와 일치한 실물 모형 기록에만 출처 표시 Reference 3D를 연결한다.
+- 확인한 공식 근거: PubChem PUG-REST의 CID full-record SDF와 `record_type=3d` 요청 계약(`https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest`), PubChem3D가 이론적으로 생성된 conformer 모형임을 설명하는 PubChem3D 논문(`https://pubmed.ncbi.nlm.nih.gov/21272340/`), 3Dmol.js `GLViewer`의 `createViewer`·`rotate`·`zoom`·`setClickable` 공개 API(`https://3dmol.org/doc/GLViewer.html`).
+- 설치·라이선스: 새 production dependency는 없다. 설치된 `3dmol@2.5.5`(BSD-3-Clause)와 `@rdkit/rdkit@2025.3.4-1.0.0`(BSD-3-Clause), 브라우저 `fetch` 경로를 재사용한다.
+- 입력 게이트: current revision의 N4 결과가 `ok=true`, `n5Ready=true`, exact identity 1개일 때만 준비한다. revision, source atom revision, identity ID, hydrogen-normalized canonical key를 요청 전후에 모두 재대조한다.
+- 조회 결정: 학생이 `5단계 Scientific Reference 3D 시작`을 명시적으로 누른 뒤에만 로컬 고정 identity→CID registry로 SDF를 요청한다. 이것은 이름 검색이나 후보 자동 순위화가 아니며, 내려받은 SDF도 RDKit exact structure match를 다시 통과해야 한다.
+- 고정 범위: 현재 registry는 N4의 10개 identity에 CID provenance를 기록한다. 기존 H2 SDF 수소 정규화 경계가 안전하게 일치하지 않아 H2는 요청 전에 fail-closed하고, 나머지 9개만 지원한다.
+- 좌표 의미: PubChem SDF는 `external-database`의 계산 3D conformer Reference 좌표다. 실험 구조, 문헌 기준값, 이 앱이 생성·최적화한 좌표라고 부르지 않으며 N4 분자식·몰 질량을 대체하지 않는다.
+- 측정 결정: current Reference 좌표에서만 Å 거리와 각도를 계산한다. 거리 선택은 SDF 결합표의 bonded pair, 각도 선택은 두 이웃이 같은 중심과 결합한 경우만 허용한다. 결과에는 `reference-coordinate` evidence를 붙이고 사진 픽셀·실물 막대 길이를 Å로 바꾸지 않는다.
+- 접근성: WebGL 클릭 외에 같은 원자를 고르는 44px 이상 DOM 버튼과 `aria-pressed` 상태를 제공하고, 앱 소유 회전·확대·축소·초기 보기 버튼을 유지한다.
+- 네트워크·개인정보: PubChem 요청에는 고정 CID만 포함하며 학생 이름, 학급, 학습 기록, 인증 토큰은 보내지 않는다. 15초 timeout, HTTP/빈 응답/불일치/late response는 viewer를 표시하지 않고 N4 결과를 보존한 채 재시도를 제공한다.
+- 범위 경계: N5는 Physical/Reference 비교, VSEPR, 맞음·틀림 판정, Structure Coach 또는 N6 시작 동작을 구현하지 않는다.
+
+## 2026-08-08 — Scanner N6 Physical Model ↔ Scientific Reference 비교
+
+- 목적: 학생이 확인한 Physical 사진·연결 graph와 N5 exact-matched Scientific Reference 3D를 출처가 분명한 별도 자료로 비교하고, 자동 채점 없이 관찰과 설명 수정을 기록한다.
+- 라이브러리 결정: 새 production dependency와 새 외부 API를 추가하지 않는다. 기존 React, 3Dmol.js viewer, RDKit.js로 검증된 N4/N5 snapshot을 재사용한다.
+- 입력 권위: parent-owned current Physical revision과 source atom/image revision, N4 validation revision, N5 Reference revision, exact identity, hydrogen-normalized canonical key가 모두 일치해야 한다. Reference SDF 원자·결합·원소 구성과 측정 결합 인접성도 scanner-owned domain에서 다시 검사한다.
+- 좌표 경계: Physical x/y/radius는 사진 overlay 용도뿐이며 비교 결과의 길이·각도·단위로 내보내지 않는다. Å/도 값은 approved Reference SDF 좌표에만 남고 Physical stable atom과 SDF atom의 1:1 map은 만들지 않는다.
+- 교육 결정: deterministic Structure Coach는 회전·관찰·근거 기록을 유도하지만 사진 한 장에서 평면성·깊이·정답·형태 이름을 자동 판정하지 않는다. 완료 snapshot은 `student-observation-not-auto-graded`로 고정한다.
+- 상태 결정: N6 draft/completion은 current source revisions에 묶고 무수정 뒤로가기는 hidden mount로 보존한다. 사진·원자·결합·validation·Reference 변경은 N6와 모든 downstream snapshot을 즉시 폐기한다.
+- 접근성·모바일: 데스크톱 2열, 390px에서는 source-labelled 단일 패널 전환을 제공하고 주요 버튼·textarea는 44px 이상을 유지한다.
+- 테스트: strict domain 15 tests, 전체 Vitest, scanner Chromium 18개 흐름, typecheck와 production build를 release gate로 유지한다.
+- 범위 경계: N6는 교실 QA, teacher scoring/dashboard, 제출·분석, 전체 분자 일반화 또는 MVP 완료 선언을 구현하지 않는다. 이는 명시적 N7 범위다.

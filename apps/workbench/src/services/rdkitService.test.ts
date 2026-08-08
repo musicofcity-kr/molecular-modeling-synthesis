@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { moleculeExamples } from '../chemistry/examples';
 import {
   getRDKitInitializationCountForTests,
+  initializeRDKit,
   resetRDKitForTests,
   validateMoleculeInput,
 } from './rdkitService';
@@ -18,6 +19,50 @@ const ethanolMolBlock = [
   '  2  3  1  0',
   'M  END',
 ].join('\n');
+
+const explicitHydrogenMethaneMolBlock = [
+  'methane with explicit hydrogens',
+  '  Ketcher 72926  9 52D 1   1.00000     0.00000     0',
+  '',
+  '  5  4  0  0  0  0  0  0  0  0999 V2000',
+  '   16.3703   -2.8413    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+  '   15.3850   -2.6702    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0',
+  '   16.5413   -1.8560    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0',
+  '   16.1993   -3.8265    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0',
+  '   17.3556   -3.0123    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0',
+  '  1  2  1  0  0  0',
+  '  1  3  1  0  0  0',
+  '  1  4  1  0  0  0',
+  '  1  5  1  0  0  0',
+  'M  END',
+].join('\n');
+
+const hydrogenMolBlock = [
+  'hydrogen',
+  '  Workbench',
+  '',
+  '  2  1  0  0  0  0  0  0  0  0999 V2000',
+  '    0.0000    0.0000    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0',
+  '    0.7400    0.0000    0.0000 H   0  0  0  0  0  0  0  0  0  0  0  0',
+  '  1  2  1  0  0  0',
+  'M  END',
+].join('\n');
+
+async function createMolBlockWithHydrogens(smiles: string): Promise<string> {
+  const rdkit = await initializeRDKit();
+  const molecule = rdkit.get_mol(smiles);
+
+  if (!molecule || !molecule.is_valid()) {
+    molecule?.delete();
+    throw new Error(`Could not create an explicit-hydrogen fixture from ${smiles}.`);
+  }
+
+  try {
+    return molecule.add_hs();
+  } finally {
+    molecule.delete();
+  }
+}
 
 function queryBondMolBlock(bondType: number): string {
   return [
@@ -208,6 +253,114 @@ describe('validateMoleculeInput', () => {
     expect(result.molecularFormula).toBe('C2H6O');
     expect(result.molecularWeight).toBeCloseTo(46.069, 3);
     expect(result.molecularWeight).not.toBeCloseTo(46.04186, 3);
+  });
+
+  it('accepts Ketcher methane when explicit hydrogens are equivalent across MOL and SMILES', async () => {
+    const result = await validateMoleculeInput({
+      source: 'ketcher',
+      validationStatus: 'unvalidated',
+      smiles: 'C([H])([H])([H])[H]',
+      molBlock: explicitHydrogenMethaneMolBlock,
+    });
+
+    expect(result.ok, result.developerLogs.join('\n')).toBe(true);
+
+    if (result.ok) {
+      expect(result.canonicalSmiles).toBe('C');
+      expect(result.molecularFormula).toBe('CH4');
+      expect(result.graphSummary).toMatchObject({
+        atomCount: 5,
+        bondCount: 4,
+        componentCount: 1,
+      });
+    }
+  });
+
+  it('keeps isotopic hydrogen differences blocked during Ketcher cross-checking', async () => {
+    const result = await validateMoleculeInput({
+      source: 'ketcher',
+      validationStatus: 'unvalidated',
+      smiles: '[2H]C([H])([H])[H]',
+      molBlock: explicitHydrogenMethaneMolBlock,
+    });
+
+    expect(result.ok).toBe(false);
+
+    if (!result.ok) {
+      expect(result.studentMessage).toContain('동위원소 또는 라디칼');
+      expect(result.developerLogs.join('\n')).toContain(
+        'unsupported atom annotation',
+      );
+    }
+  });
+
+  it('keeps atom-mapped hydrogen differences blocked during Ketcher cross-checking', async () => {
+    const result = await validateMoleculeInput({
+      source: 'ketcher',
+      validationStatus: 'unvalidated',
+      smiles: '[H:7][C:1]([H])([H])[H]',
+      molBlock: explicitHydrogenMethaneMolBlock,
+    });
+
+    expect(result.ok).toBe(false);
+
+    if (!result.ok) {
+      expect(result.studentMessage).toContain('구조 검토가 필요합니다');
+      expect(result.developerLogs.join('\n')).toContain(
+        'Ketcher structure mismatch',
+      );
+    }
+  });
+
+  it('accepts matching stereochemistry after explicit-hydrogen normalization', async () => {
+    const smiles = 'C[C@H](O)C(=O)O';
+    const result = await validateMoleculeInput({
+      source: 'ketcher',
+      validationStatus: 'unvalidated',
+      smiles,
+      molBlock: await createMolBlockWithHydrogens(smiles),
+    });
+
+    expect(result.ok, result.developerLogs.join('\n')).toBe(true);
+  });
+
+  it('blocks opposite stereochemistry after explicit-hydrogen normalization', async () => {
+    const result = await validateMoleculeInput({
+      source: 'ketcher',
+      validationStatus: 'unvalidated',
+      smiles: 'C[C@@H](O)C(=O)O',
+      molBlock: await createMolBlockWithHydrogens('C[C@H](O)C(=O)O'),
+    });
+
+    expect(result.ok).toBe(false);
+
+    if (!result.ok) {
+      expect(result.studentMessage).toContain('구조 검토가 필요합니다');
+      expect(result.developerLogs.join('\n')).toContain(
+        'Ketcher structure mismatch',
+      );
+    }
+  });
+
+  it('keeps an all-hydrogen molecule valid while normalizing canonical structure keys', async () => {
+    const result = await validateMoleculeInput({
+      source: 'ketcher',
+      validationStatus: 'unvalidated',
+      smiles: '[H][H]',
+      molBlock: hydrogenMolBlock,
+    });
+
+    expect(result.ok, result.developerLogs.join('\n')).toBe(true);
+
+    if (result.ok) {
+      expect(result.canonicalSmiles).toBe('[H][H]');
+      expect(result.molecularFormula).toBe('H2');
+      expect(result.graphSummary).toMatchObject({
+        atomCount: 2,
+        bondCount: 1,
+        componentCount: 1,
+      });
+    }
   });
 
   it('validates beryllium chloride and displays its molecular formula', async () => {

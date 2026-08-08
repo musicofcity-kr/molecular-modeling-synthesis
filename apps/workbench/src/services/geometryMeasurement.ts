@@ -8,6 +8,8 @@ import { parseStrictV2000Layout } from '../chemistry/v2000MolBlock';
 
 const FLOAT_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?$/;
 
+export type BondedAtomPair = readonly [number, number];
+
 export function formatAtom3DLabel(atom: SelectedAtom3D, includeIndex = true): string {
   return includeIndex ? `${atom.element}${atom.atomIndex}` : atom.element;
 }
@@ -44,6 +46,85 @@ export function parseAtomsFromMolecule3DInput(
     case 'pdb':
       return parsePdbAtoms(input.data);
   }
+}
+
+export function parseBondedAtomPairsFromMolecule3DInput(
+  input: Molecule3DInput | null | undefined,
+): BondedAtomPair[] {
+  if (
+    !input?.data.trim() ||
+    input.coordinateDimension !== '3d' ||
+    (input.format !== 'mol' && input.format !== 'sdf')
+  ) {
+    return [];
+  }
+
+  const layout = parseStrictV2000Layout(input.data);
+  if (!layout || layout.atomCount <= 0 || layout.bondCount <= 0) {
+    return [];
+  }
+
+  const firstBondLineIndex = layout.countsLineIndex + 1 + layout.atomCount;
+  const pairs: BondedAtomPair[] = [];
+  const seen = new Set<string>();
+
+  for (let offset = 0; offset < layout.bondCount; offset += 1) {
+    const line = layout.lines[firstBondLineIndex + offset];
+    const first = Number(line?.slice(0, 3));
+    const second = Number(line?.slice(3, 6));
+    const order = Number(line?.slice(6, 9));
+
+    if (
+      !line ||
+      !Number.isInteger(first) ||
+      !Number.isInteger(second) ||
+      !Number.isInteger(order) ||
+      first <= 0 ||
+      second <= 0 ||
+      first > layout.atomCount ||
+      second > layout.atomCount ||
+      first === second ||
+      order <= 0
+    ) {
+      return [];
+    }
+
+    const pair: BondedAtomPair = first < second ? [first, second] : [second, first];
+    const key = `${pair[0]}:${pair[1]}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      pairs.push(pair);
+    }
+  }
+
+  return pairs.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+}
+
+export function isBondedMeasurementSelection(
+  mode: Exclude<AtomSelectionMode, 'none'>,
+  atomIndices: number[],
+  bondedPairs: readonly BondedAtomPair[],
+): boolean {
+  const distinctIndices = new Set(atomIndices);
+  if (distinctIndices.size !== atomIndices.length) {
+    return false;
+  }
+
+  const hasPair = (first: number, second: number) => {
+    const low = Math.min(first, second);
+    const high = Math.max(first, second);
+    return bondedPairs.some(([left, right]) => left === low && right === high);
+  };
+
+  if (mode === 'bond_length') {
+    return atomIndices.length === 2 && hasPair(atomIndices[0], atomIndices[1]);
+  }
+
+  return (
+    atomIndices.length === 3 &&
+    hasPair(atomIndices[0], atomIndices[1]) &&
+    hasPair(atomIndices[1], atomIndices[2])
+  );
 }
 
 export function calculateDistanceAngstrom(

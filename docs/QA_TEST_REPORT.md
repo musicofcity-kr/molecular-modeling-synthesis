@@ -197,3 +197,41 @@ production 배포 승인 전에는 반드시 별도 확인한다.
 
 이번 수정에서도 새 production dependency, 커밋, push, 배포는 수행하지
 않았다.
+
+## 10. 2026-07-29 Ketcher 명시적 수소 구조 분석 회귀 수정
+
+### 재현과 원인
+
+- Ketcher에서 C 원자와 H 원자 4개를 직접 연결한 메테인은 MolBlock에서
+  5원자·4결합으로 전달되지만, 함께 전달된 SMILES는 RDKit 정규화 과정에서
+  암시적 수소 표현 `C`가 된다.
+- 기존 교차 검증은 MolBlock의 `[H]C([H])([H])[H]`와 SMILES의 `C`를 문자열로
+  직접 비교해 같은 분자를 구조 불일치로 차단했다.
+- 구조 검증이 실패하면서 분자식·VSEPR 분석과 참고 3D 전달도 함께 중단됐다.
+
+### 수정
+
+- Ketcher의 MolBlock/SMILES 교차 검증에만 보수적인 수소 정규화를 적용했다.
+- 동위원소, 원자 매핑, 쐐기 결합, 입체 정의 결합, hydride, query,
+  SGroup 수소와 수소만으로 된 분자는 제거하지 않는다.
+- 그래프·분자식·분자량·VSEPR 근거는 원래의 5원자·4결합 MolBlock을 그대로
+  사용하며, 정규화 결과는 두 표현의 동등성 판정과 canonical SMILES 전달에만
+  사용한다.
+- 실제 구조 차이, 반대 입체화학, 동위원소·라디칼 등 지원하지 않는 표기는
+  계속 fail-closed로 차단한다.
+
+### 최종 검증
+
+- `npm run typecheck`: 통과
+- `npm test`: 55 files / 402 tests 통과
+- RDKit 집중 테스트: 49/49 통과
+- 명시적 수소 메테인 E2E 3회 반복: 3/3 통과
+- 테스트 전용 서버(`PLAYWRIGHT_PORT=5187`, `CI=1`) 전체 E2E:
+  Chromium 34 + Mobile Chromium 1, 총 35/35 통과
+- 메테인 E2E: CH4, 5원자·4결합·1조각, 중심 원자 C1, 전자 영역 4,
+  정사면체 VSEPR, VSEPR·참고 3D 각각 실제 canvas 렌더와 0보다 큰 크기 확인
+- `npm run build`: 성공
+- 독립 코드 리뷰: 24/24, 차단 결함 없음, `Accept`
+- `git diff --check`: 오류 없음
+
+새 production dependency, 커밋, push, 배포는 수행하지 않았다.

@@ -94,7 +94,8 @@ $$$$`;
         sourceUrl:
           'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/962/record/SDF?record_type=3d',
       });
-      expect(result.molecule3D.sourceNote).toContain('교육용 시각화 자료');
+      expect(result.molecule3D.sourceNote).toContain('계산 3D conformer SDF 좌표');
+      expect(result.molecule3D.sourceNote).toContain('실험값·문헌 기준값');
       expect(result.developerLogs).toContain('PubChem 3D SDF fetch succeeded: CID 962.');
     }
   });
@@ -149,6 +150,57 @@ $$$$`;
       'CID: 702',
       'fetch error message: network unavailable',
     ]);
+  });
+
+  it('aborts an SDF request that exceeds the configured timeout', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => {
+                const abortError = new Error('SDF request aborted by signal');
+                abortError.name = 'AbortError';
+                reject(abortError);
+              },
+              { once: true },
+            );
+          }),
+      );
+
+      const resultPromise = fetchPubChem3DSdf(
+        {
+          cid: 702,
+          label: 'Ethanol',
+          expectedCanonicalSmiles: 'CCO',
+        },
+        fetchImpl,
+        { timeoutMs: 25 },
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await resultPromise;
+
+      expect(fetchImpl).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe('error');
+      expect(result.developerLogs).toContain(
+        'request timeout: aborted after 25 ms.',
+      );
+      expect(result.developerLogs.join('\n')).toContain(
+        'fetch error message: SDF request aborted by signal',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('blocks a valid SDF whose RDKit canonical structure differs from the current structure', async () => {

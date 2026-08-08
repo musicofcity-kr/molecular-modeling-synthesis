@@ -19,14 +19,37 @@ import {
   buildGeometryMeasurementResult,
   formatAtom3DLabel,
   getRequiredAtomCount,
+  isBondedMeasurementSelection,
   parseAtomsFromMolecule3DInput,
+  parseBondedAtomPairsFromMolecule3DInput,
 } from '../services/geometryMeasurement';
 
 export type Molecule3DViewerHandle = {
   loadStructure(input: Molecule3DInput): void;
   clear(): void;
   resize(): void;
+  resetView(): boolean;
+  rotate(degrees: number): boolean;
+  zoom(factor: number): boolean;
 };
+
+export type Molecule3DRenderState = {
+  evidenceKey: string | null;
+  modelRendered: boolean;
+};
+
+export function emitMolecule3DRenderState(
+  onRenderStateChange: ((state: Molecule3DRenderState) => void) | undefined,
+  evidenceKey: string | null | undefined,
+  modelRendered: boolean,
+): Molecule3DRenderState {
+  const state = {
+    evidenceKey: evidenceKey ?? null,
+    modelRendered,
+  };
+  onRenderStateChange?.(state);
+  return state;
+}
 
 type Molecule3DViewerProps = {
   coordinateData?: Molecule3DInput | null;
@@ -35,8 +58,13 @@ type Molecule3DViewerProps = {
   userMode?: UserMode;
   showAdvancedControls?: boolean;
   showMeasurementControls?: boolean;
+  testIdNamespace?: string;
+  measurementEvidenceType?: 'coordinate' | 'reference-coordinate';
+  requireBondedMeasurements?: boolean;
+  renderEvidenceKey?: string;
   actionSlot?: ReactNode;
   onMeasurementResultsChange?: (results: GeometryMeasurementResult[]) => void;
+  onRenderStateChange?: (state: Molecule3DRenderState) => void;
   onDeveloperLog?: (message: string) => void;
 };
 
@@ -253,8 +281,13 @@ export const Molecule3DViewer = forwardRef<
     userMode = 'student',
     showAdvancedControls,
     showMeasurementControls,
+    testIdNamespace,
+    measurementEvidenceType = 'coordinate',
+    requireBondedMeasurements = false,
+    renderEvidenceKey,
     actionSlot,
     onMeasurementResultsChange,
+    onRenderStateChange,
     onDeveloperLog,
   },
   ref,
@@ -265,6 +298,9 @@ export const Molecule3DViewer = forwardRef<
   const lastNoCoordinateLogKeyRef = useRef<string | null>(null);
   const parsedAtomsRef = useRef<SelectedAtom3D[]>([]);
   const measurementModeRef = useRef<AtomSelectionMode>('none');
+  const selectedAtomsRef = useRef<SelectedAtom3D[]>([]);
+  const renderEvidenceKeyRef = useRef<string | null>(renderEvidenceKey ?? null);
+  const onRenderStateChangeRef = useRef(onRenderStateChange);
   const [viewerStatus, setViewerStatus] = useState<'loading' | 'ready' | 'error'>(
     'loading',
   );
@@ -282,9 +318,23 @@ export const Molecule3DViewer = forwardRef<
   const [measurementResults, setMeasurementResults] = useState<
     GeometryMeasurementResult[]
   >([]);
+  const [measurementSelectionMessage, setMeasurementSelectionMessage] =
+    useState<string | null>(null);
   const [parsedAtoms, setParsedAtoms] = useState<SelectedAtom3D[]>(
     parseAtomsFromMolecule3DInput(coordinateData),
   );
+
+  renderEvidenceKeyRef.current = renderEvidenceKey ?? null;
+  onRenderStateChangeRef.current = onRenderStateChange;
+
+  function updateModelRendered(nextModelRendered: boolean) {
+    setModelRendered(nextModelRendered);
+    emitMolecule3DRenderState(
+      onRenderStateChangeRef.current,
+      renderEvidenceKeyRef.current,
+      nextModelRendered,
+    );
+  }
 
   function clearViewer() {
     const viewer = viewerRef.current;
@@ -306,7 +356,7 @@ export const Molecule3DViewer = forwardRef<
     setHasRenderableSize(nextHasRenderableSize);
 
     if (!nextHasRenderableSize) {
-      setModelRendered(false);
+      updateModelRendered(false);
     }
   }
 
@@ -339,12 +389,6 @@ export const Molecule3DViewer = forwardRef<
   }
 
   function handleAtomClick(clickedAtom: ThreeDmolAtomLike) {
-    const mode = measurementModeRef.current;
-
-    if (mode === 'none') {
-      return;
-    }
-
     const matchedAtom = findMatchingParsedAtom(clickedAtom, parsedAtomsRef.current);
 
     if (!matchedAtom || !coordinateData) {
@@ -352,36 +396,67 @@ export const Molecule3DViewer = forwardRef<
       return;
     }
 
-    const requiredAtomCount = getRequiredAtomCount(mode);
-
-    setSelectedAtoms((currentAtoms) => {
-      const nextAtoms = [...currentAtoms, matchedAtom].slice(-requiredAtomCount);
-
-      if (nextAtoms.length === requiredAtomCount) {
-        try {
-          const result = buildGeometryMeasurementResult({
-            mode,
-            atoms: nextAtoms,
-            sourceNote: buildMeasurementSourceNote(coordinateData),
-          });
-
-          setMeasurementResults((currentResults) => [result, ...currentResults].slice(0, 4));
-        } catch (error) {
-          onDeveloperLog?.(
-            `3D geometry measurement failed: ${getErrorMessage(error)}`,
-          );
-        }
-      }
-
-      return nextAtoms;
-    });
+    selectMeasurementAtom(matchedAtom);
   }
 
-  function resetView() {
+  function selectMeasurementAtom(matchedAtom: SelectedAtom3D) {
+    const mode = measurementModeRef.current;
+
+    if (mode === 'none' || !coordinateData) {
+      return;
+    }
+
+    const requiredAtomCount = getRequiredAtomCount(mode);
+    const currentAtoms = selectedAtomsRef.current;
+
+    if (currentAtoms.some(({ atomIndex }) => atomIndex === matchedAtom.atomIndex)) {
+      setMeasurementSelectionMessage('서로 다른 Reference 원자를 선택해 주세요.');
+      return;
+    }
+
+    const nextAtoms = [...currentAtoms, matchedAtom].slice(-requiredAtomCount);
+    selectedAtomsRef.current = nextAtoms;
+    setSelectedAtoms(nextAtoms);
+
+    if (nextAtoms.length !== requiredAtomCount) return;
+
+    if (
+      requireBondedMeasurements &&
+      !isBondedMeasurementSelection(
+        mode,
+        nextAtoms.map(({ atomIndex }) => atomIndex),
+        parseBondedAtomPairsFromMolecule3DInput(coordinateData),
+      )
+    ) {
+      setMeasurementSelectionMessage(
+        mode === 'bond_length'
+          ? '서로 결합한 Reference 원자 2개를 선택해 주세요.'
+          : '두 번째 원자가 중심이고, 양쪽 원자가 중심과 결합하도록 선택해 주세요.',
+      );
+      return;
+    }
+
+    try {
+      const result = buildGeometryMeasurementResult({
+        mode,
+        atoms: nextAtoms,
+        sourceNote: buildMeasurementSourceNote(coordinateData),
+      });
+
+      setMeasurementResults((currentResults) => [result, ...currentResults].slice(0, 4));
+      setMeasurementSelectionMessage(null);
+    } catch (error) {
+      onDeveloperLog?.(
+        `3D geometry measurement failed: ${getErrorMessage(error)}`,
+      );
+    }
+  }
+
+  function resetView(): boolean {
     const viewer = viewerRef.current;
 
-    if (!viewer || !hasRenderableMoleculeViewerSize(hostRef.current)) {
-      return;
+    if (!modelRendered || !viewer || !hasRenderableMoleculeViewerSize(hostRef.current)) {
+      return false;
     }
 
     if (initialViewRef.current) {
@@ -391,6 +466,7 @@ export const Molecule3DViewer = forwardRef<
     }
 
     viewer.render();
+    return true;
   }
 
   function zoomToFit() {
@@ -404,8 +480,32 @@ export const Molecule3DViewer = forwardRef<
     viewer.render();
   }
 
+  function rotateViewer(degrees: number): boolean {
+    const viewer = viewerRef.current;
+
+    if (!modelRendered || !viewer || !hasRenderableMoleculeViewerSize(hostRef.current)) {
+      return false;
+    }
+
+    viewer.rotate(degrees, 'y');
+    viewer.render();
+    return true;
+  }
+
+  function zoomViewer(factor: number): boolean {
+    const viewer = viewerRef.current;
+
+    if (!modelRendered || !viewer || !hasRenderableMoleculeViewerSize(hostRef.current)) {
+      return false;
+    }
+
+    viewer.zoom(factor);
+    viewer.render();
+    return true;
+  }
+
   function loadStructure(input: Molecule3DInput) {
-    setModelRendered(false);
+    updateModelRendered(false);
     const viewer = viewerRef.current;
 
     if (!viewer || !hasRenderableMoleculeViewerSize(hostRef.current)) {
@@ -424,15 +524,17 @@ export const Molecule3DViewer = forwardRef<
 
     parsedAtomsRef.current = atoms;
     setParsedAtoms(atoms);
+    selectedAtomsRef.current = [];
     setSelectedAtoms([]);
     setMeasurementResults([]);
+    setMeasurementSelectionMessage(null);
     viewer.clear();
     viewer.addModel(input.data, get3DmolModelFormat(input.format));
     applyViewerPresentation(viewer, atoms);
     viewer.zoomTo();
     initialViewRef.current = viewer.getView();
     viewer.render();
-    setModelRendered(true);
+    updateModelRendered(true);
     setStudentMessage(`${input.label}의 교육용 3D 자료를 표시합니다.`);
   }
 
@@ -442,11 +544,14 @@ export const Molecule3DViewer = forwardRef<
       loadStructure,
       clear: () => {
         clearViewer();
-        setModelRendered(false);
+        updateModelRendered(false);
       },
       resize: resizeViewer,
+      resetView,
+      rotate: rotateViewer,
+      zoom: zoomViewer,
     }),
-    [representationMode, showAtomLabels, atomSelectionMode, userMode],
+    [atomSelectionMode, modelRendered, representationMode, showAtomLabels, userMode],
   );
 
   useEffect(() => {
@@ -495,7 +600,7 @@ export const Molecule3DViewer = forwardRef<
 
         window.addEventListener('resize', handleResize);
       } catch (error) {
-        setModelRendered(false);
+        updateModelRendered(false);
         setViewerStatus('error');
         setStudentMessage('3D 구조 보기를 초기화하지 못했습니다.');
         onDeveloperLog?.(`3Dmol.js viewer initialization failed: ${getErrorMessage(error)}`);
@@ -519,26 +624,30 @@ export const Molecule3DViewer = forwardRef<
     }
 
     if (!coordinateData) {
-      setModelRendered(false);
+      updateModelRendered(false);
       clearViewer();
       initialViewRef.current = null;
       parsedAtomsRef.current = [];
       setParsedAtoms([]);
+      selectedAtomsRef.current = [];
       setSelectedAtoms([]);
       setMeasurementResults([]);
+      setMeasurementSelectionMessage(null);
       setAtomSelectionMode('none');
       setStudentMessage(NO_COORDINATES_MESSAGE);
       return;
     }
 
     if (coordinateData.coordinateDimension !== '3d') {
-      setModelRendered(false);
+      updateModelRendered(false);
       clearViewer();
       initialViewRef.current = null;
       parsedAtomsRef.current = [];
       setParsedAtoms([]);
+      selectedAtomsRef.current = [];
       setSelectedAtoms([]);
       setMeasurementResults([]);
+      setMeasurementSelectionMessage(null);
       setAtomSelectionMode('none');
       setStudentMessage(NOT_CONFIRMED_3D_COORDINATES_MESSAGE);
       onDeveloperLog?.('3D structure load blocked: coordinateDimension is not 3d.');
@@ -546,20 +655,22 @@ export const Molecule3DViewer = forwardRef<
     }
 
     if (!hasRenderableSize) {
-      setModelRendered(false);
+      updateModelRendered(false);
       return;
     }
 
     try {
       loadStructure(coordinateData);
     } catch (error) {
-      setModelRendered(false);
+      updateModelRendered(false);
       clearViewer();
       initialViewRef.current = null;
       parsedAtomsRef.current = [];
       setParsedAtoms([]);
+      selectedAtomsRef.current = [];
       setSelectedAtoms([]);
       setMeasurementResults([]);
+      setMeasurementSelectionMessage(null);
       setAtomSelectionMode('none');
       setStudentMessage('3D 자료를 표시하지 못했습니다.');
       onDeveloperLog?.(`3Dmol.js structure load failed: ${getErrorMessage(error)}`);
@@ -618,7 +729,8 @@ export const Molecule3DViewer = forwardRef<
     modelRendered &&
     hasCoordinateData &&
     has3DCoordinateData &&
-    hasValidatedStructure;
+    hasValidatedStructure &&
+    (!requireBondedMeasurements || coordinateData?.structureMatchStatus === 'verified');
   const canUseParsedAtomTools = canUseCoordinateControls && parsedAtoms.length > 0;
   const measurementNotice = getMeasurementNotice({
     hasCoordinateData,
@@ -630,9 +742,13 @@ export const Molecule3DViewer = forwardRef<
   const requiredAtomCount = getRequiredAtomCount(atomSelectionMode);
   const measurementInstruction =
     atomSelectionMode === 'bond_length'
-      ? '원자 2개를 차례로 선택하면 두 원자 사이 거리를 계산합니다.'
+      ? requireBondedMeasurements
+        ? '서로 결합한 원자 2개를 차례로 선택하세요.'
+        : '원자 2개를 차례로 선택하면 두 원자 사이 거리를 계산합니다.'
       : atomSelectionMode === 'bond_angle'
-        ? '원자 3개를 선택하면 두 번째 원자를 중심으로 각도를 계산합니다.'
+        ? requireBondedMeasurements
+          ? '이웃 원자, 중심 원자, 다른 이웃 원자 순서로 선택하세요.'
+          : '원자 3개를 선택하면 두 번째 원자를 중심으로 각도를 계산합니다.'
         : '측정 모드를 선택한 뒤 3D 구조의 원자를 클릭하세요.';
   const shouldShowAdvancedControls = showAdvancedControls ?? userMode === 'teacher';
   const shouldShowMeasurementControls =
@@ -640,13 +756,17 @@ export const Molecule3DViewer = forwardRef<
 
   const handleMeasurementModeChange = (nextMode: AtomSelectionMode) => {
     setAtomSelectionMode(nextMode);
+    selectedAtomsRef.current = [];
     setSelectedAtoms([]);
+    setMeasurementSelectionMessage(null);
   };
+  const testId = (suffix: string, fallback: string) =>
+    testIdNamespace ? `${testIdNamespace}-${suffix}` : fallback;
 
   return (
     <section
       className="workspace-panel viewer-panel"
-      data-testid="molecule-3d-viewer"
+      data-testid={testId('viewer', 'molecule-3d-viewer')}
       data-viewer-status={viewerStatus}
       data-model-rendered={modelRendered ? 'true' : 'false'}
     >
@@ -778,8 +898,8 @@ export const Molecule3DViewer = forwardRef<
               <dt>계산 기준</dt>
               <dd>
                 {userMode === 'teacher'
-                  ? '분자식과 분자량은 RDKit.js 검증 결과입니다.'
-                  : '분자식과 분자량은 구조 확인 결과입니다.'}
+                  ? '분자식과 몰 질량은 RDKit.js 검증 결과입니다.'
+                  : '분자식과 몰 질량은 구조 확인 결과입니다.'}
               </dd>
             </div>
             {userMode === 'teacher' ? (
@@ -838,6 +958,7 @@ export const Molecule3DViewer = forwardRef<
               atomSelectionMode === 'none' ? 'secondary-action active' : 'secondary-action'
             }
             type="button"
+            aria-pressed={atomSelectionMode === 'none'}
             onClick={() => {
               handleMeasurementModeChange('none');
             }}
@@ -850,7 +971,8 @@ export const Molecule3DViewer = forwardRef<
                 ? 'secondary-action active'
                 : 'secondary-action'
             }
-            data-testid="bond-length-mode-button"
+            data-testid={testId('distance-mode', 'bond-length-mode-button')}
+            aria-pressed={atomSelectionMode === 'bond_length'}
             disabled={!canUseParsedAtomTools}
             type="button"
             onClick={() => {
@@ -865,7 +987,8 @@ export const Molecule3DViewer = forwardRef<
                 ? 'secondary-action active'
                 : 'secondary-action'
             }
-            data-testid="bond-angle-mode-button"
+            data-testid={testId('angle-mode', 'bond-angle-mode-button')}
+            aria-pressed={atomSelectionMode === 'bond_angle'}
             disabled={!canUseParsedAtomTools}
             type="button"
             onClick={() => {
@@ -882,7 +1005,7 @@ export const Molecule3DViewer = forwardRef<
             <dd>{formatMeasurementMode(atomSelectionMode)}</dd>
           </div>
           <div>
-            <dt>파싱된 원자 수</dt>
+            <dt>{testIdNamespace === 'scanner-reference' ? 'Reference 원자 수' : '읽은 원자 수'}</dt>
             <dd>{parsedAtoms.length > 0 ? `${parsedAtoms.length}개` : '좌표 없음'}</dd>
           </div>
           <div>
@@ -904,6 +1027,42 @@ export const Molecule3DViewer = forwardRef<
         </dl>
 
         <p className="measurement-instruction">{measurementInstruction}</p>
+        {measurementSelectionMessage ? (
+          <p className="measurement-selection-message" role="status" aria-live="polite">
+            {measurementSelectionMessage}
+          </p>
+        ) : null}
+
+        <div
+          className="measurement-atom-picker"
+          data-testid={testId('atom-list', 'measurement-atom-list')}
+        >
+          <strong>Reference 원자 선택</strong>
+          <div className="measurement-atom-buttons">
+            {parsedAtoms.map((atom) => {
+              const isSelected = selectedAtoms.some(
+                ({ atomIndex }) => atomIndex === atom.atomIndex,
+              );
+              const label = formatAtom3DLabel(atom);
+
+              return (
+                <button
+                  key={atom.atomIndex}
+                  className={isSelected ? 'secondary-action active' : 'secondary-action'}
+                  data-testid={testId('atom-button', 'measurement-atom-button')}
+                  data-atom-index={atom.atomIndex}
+                  aria-label={`${label} 원자 선택`}
+                  aria-pressed={isSelected}
+                  disabled={!canUseParsedAtomTools || atomSelectionMode === 'none'}
+                  type="button"
+                  onClick={() => selectMeasurementAtom(atom)}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         <div className="viewer-button-row">
           <button
@@ -912,6 +1071,7 @@ export const Molecule3DViewer = forwardRef<
             disabled={selectedAtoms.length === 0}
             type="button"
             onClick={() => {
+              selectedAtomsRef.current = [];
               setSelectedAtoms([]);
             }}
           >
@@ -931,14 +1091,27 @@ export const Molecule3DViewer = forwardRef<
         </div>
 
         {measurementResults.length > 0 ? (
-          <ol className="measurement-result-list" data-testid="measurement-result-list">
+          <ol
+            className="measurement-result-list"
+            data-testid="measurement-result-list"
+            aria-live="polite"
+          >
             {measurementResults.map((result) => (
-              <li key={`${result.type}-${result.atomIndices.join('-')}-${result.value}`}>
+              <li
+                key={`${result.type}-${result.atomIndices.join('-')}-${result.value}`}
+                data-testid={testId(
+                  result.type === 'bond_length' ? 'distance-output' : 'angle-output',
+                  result.type === 'bond_length' ? 'distance-output' : 'angle-output',
+                )}
+                data-evidence-type={measurementEvidenceType}
+              >
                 <strong>{formatMeasurementValue(result)}</strong>
                 <p>
                   {result.type === 'bond_angle'
                     ? '두 번째로 선택한 원자를 중심으로 계산한 각도입니다.'
-                    : '선택한 두 원자 사이 거리입니다. 실제 결합 여부를 단정하지 않습니다.'}
+                    : requireBondedMeasurements
+                      ? 'Reference SDF 결합표에서 연결을 확인한 두 원자 사이 거리입니다.'
+                      : '선택한 두 원자 사이 거리입니다. 실제 결합 여부를 단정하지 않습니다.'}
                 </p>
                 <p>{result.sourceNote}</p>
               </li>

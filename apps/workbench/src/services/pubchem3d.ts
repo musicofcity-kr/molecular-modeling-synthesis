@@ -39,7 +39,7 @@ const PUBCHEM_3D_NO_DATA_MESSAGE =
   'PubChem에 후보는 있지만 3D 좌표 데이터가 제공되지 않을 수 있습니다. 2D 구조와 분자식 검증 결과는 계속 사용할 수 있습니다.';
 
 const PUBCHEM_3D_SOURCE_NOTE =
-  'PubChem PUG-REST에서 CID 기반으로 가져온 3D SDF 좌표입니다. 교육용 시각화 자료이며 분자식, 분자량, 결합각, 결합길이의 기준으로 사용하지 않습니다.';
+  'PubChem PUG-REST에서 CID 기반으로 가져온 계산 3D conformer SDF 좌표입니다. 현재 좌표에서 거리와 각도를 계산할 수 있지만, 실험값·문헌 기준값·이 앱의 최적화 결과로 해석하지 않습니다. 분자식과 몰 질량의 근거는 아닙니다.';
 
 const PUBCHEM_3D_STRUCTURE_MISMATCH_MESSAGE =
   '외부 3D 구조가 현재 확인한 2D 구조와 일치하지 않아 불러오기를 중단했습니다. 현재 구조를 다시 확인해 주세요.';
@@ -48,6 +48,11 @@ const PUBCHEM_3D_STRUCTURE_VALIDATION_FAILURE_MESSAGE =
   '외부 3D 구조가 구조 검증을 통과하지 못해 불러오기를 중단했습니다. 2D 구조 검증 결과는 계속 확인할 수 있습니다.';
 
 const RESPONSE_TEXT_LIMIT = 500;
+const DEFAULT_PUBCHEM_TIMEOUT_MS = 15_000;
+
+type PubChemRequestOptions = {
+  timeoutMs?: number;
+};
 
 function buildPubChem3DSdfUrl(cid: number): string {
   return `https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/${cid}/record/SDF?record_type=3d`;
@@ -194,6 +199,7 @@ async function verifySdfMatchesExpectedCanonicalStructure(
 export async function fetchPubChem3DSdf(
   input: PubChem3DLookupInput,
   fetchImpl: typeof fetch = fetch,
+  requestOptions: PubChemRequestOptions = {},
 ): Promise<PubChem3DLookupResult> {
   const invalidCidReason = validateCid(input.cid);
 
@@ -228,6 +234,14 @@ export async function fetchPubChem3DSdf(
   }
 
   const url = buildPubChem3DSdfUrl(input.cid);
+  const timeoutMs =
+    requestOptions.timeoutMs ?? DEFAULT_PUBCHEM_TIMEOUT_MS;
+  const abortController = new AbortController();
+  let didTimeout = false;
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    abortController.abort();
+  }, timeoutMs);
 
   try {
     const response = await fetchImpl(url, {
@@ -235,6 +249,7 @@ export async function fetchPubChem3DSdf(
       headers: {
         Accept: 'chemical/x-mdl-sdfile, text/plain;q=0.9, */*;q=0.8',
       },
+      signal: abortController.signal,
     });
     const responseText = await response.text();
 
@@ -333,6 +348,10 @@ export async function fetchPubChem3DSdf(
       ],
     };
   } catch (error) {
+    const wasAborted =
+      didTimeout ||
+      (error instanceof Error && error.name === 'AbortError');
+
     return {
       ok: false,
       status: 'error',
@@ -341,10 +360,19 @@ export async function fetchPubChem3DSdf(
       developerLogs: [
         'PubChem 3D SDF fetch failed.',
         `CID: ${input.cid}`,
+        ...(wasAborted
+          ? [
+              didTimeout
+                ? `request timeout: aborted after ${timeoutMs} ms.`
+                : 'request aborted before completion.',
+            ]
+          : []),
         `fetch error message: ${
           error instanceof Error ? error.message : 'Unknown fetch error'
         }`,
       ],
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

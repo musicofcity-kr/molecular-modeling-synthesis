@@ -1064,6 +1064,7 @@ select {
 .viewer-control-group p,
 .measurement-notice,
 .measurement-instruction,
+.measurement-selection-message,
 .measurement-empty-result,
 .measurement-result-list p,
 .measurement-teacher-note {
@@ -1085,11 +1086,23 @@ select {
 }
 
 .viewer-button-row,
-.measurement-mode-buttons {
+.measurement-mode-buttons,
+.measurement-atom-buttons {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.measurement-atom-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.measurement-atom-buttons .secondary-action {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px 12px;
 }
 
 .secondary-action.active {
@@ -1806,6 +1819,13 @@ select {
   color: var(--ink-soft);
   font-size: 0.9rem;
   line-height: 1.5;
+}
+
+.measurement-selection-message {
+  border-left: 3px solid #b77c16;
+  background: #fff7e5;
+  color: #674b12;
+  padding: 8px 10px;
 }
 
 .teacher-advanced-panel {

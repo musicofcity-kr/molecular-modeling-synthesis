@@ -67,7 +67,33 @@ type AtomAnnotationAssessment =
       studentMessage: string;
     };
 
+type JSMolWithRemoveHsOptions = {
+  remove_hs(detailsJson: string): string;
+};
+
 const V2000_QUERY_PROPERTY_TAGS = new Set(['SUB', 'UNS', 'RBC']);
+const CONSERVATIVE_REMOVE_HS_OPTIONS = JSON.stringify({
+  removeDegreeZero: false,
+  removeHigherDegrees: false,
+  removeOnlyHNeighbors: false,
+  removeIsotopes: false,
+  removeAndTrackIsotopes: false,
+  removeDummyNeighbors: false,
+  removeDefiningBondStereo: false,
+  removeWithWedgedBond: false,
+  removeWithQuery: false,
+  removeMapped: false,
+  removeInSGroups: false,
+  showWarnings: true,
+  removeNonimplicit: true,
+  updateExplicitCount: false,
+  removeHydrides: false,
+  removeNontetrahedralNeighbors: false,
+  sanitize: true,
+});
+const PRESERVE_HYDROGENS_WHEN_REPARSING = JSON.stringify({
+  removeHs: false,
+});
 
 let rdkitModulePromise: Promise<RDKitModule> | null = null;
 let rdkitInitializationCount = 0;
@@ -166,6 +192,45 @@ function selectValidationInput(input: MoleculeInput): {
   }
 
   return {};
+}
+
+function getHydrogenNormalizedCanonicalSmiles(
+  rdkit: RDKitModule,
+  molecule: JSMol,
+  sourceLabel: string,
+): string {
+  let hydrogenNormalizedMolecule: JSMol | null = null;
+
+  try {
+    const hydrogenNormalizedMolBlock = (
+      molecule as unknown as JSMolWithRemoveHsOptions
+    ).remove_hs(CONSERVATIVE_REMOVE_HS_OPTIONS);
+    hydrogenNormalizedMolecule = rdkit.get_mol(
+      hydrogenNormalizedMolBlock,
+      PRESERVE_HYDROGENS_WHEN_REPARSING,
+    );
+
+    if (
+      !hydrogenNormalizedMolecule ||
+      !hydrogenNormalizedMolecule.is_valid()
+    ) {
+      throw new Error(
+        `${sourceLabel} could not be normalized by RDKit after removing explicit hydrogens.`,
+      );
+    }
+
+    const canonicalSmiles = hydrogenNormalizedMolecule.get_smiles().trim();
+
+    if (!canonicalSmiles) {
+      throw new Error(
+        `${sourceLabel} produced an empty RDKit canonical SMILES after removing explicit hydrogens.`,
+      );
+    }
+
+    return canonicalSmiles;
+  } finally {
+    hydrogenNormalizedMolecule?.delete();
+  }
 }
 
 function parseDescriptors(value: string): DescriptorResult {
@@ -398,7 +463,7 @@ export async function validateMoleculeInput(
       );
     }
 
-    const canonicalSmiles = mol.get_smiles();
+    const rawCanonicalSmiles = mol.get_smiles();
     const rdkitJson = mol.get_json();
     const graphSummary = summarizeRDKitGraphJson(rdkitJson);
     const connectivityDecision = evaluateConnectivity(
@@ -412,15 +477,17 @@ export async function validateMoleculeInput(
     };
     const graphContext = validationGraphContext;
 
-    if (canonicalSmiles.includes('~') || canonicalSmiles.includes('*')) {
+    if (rawCanonicalSmiles.includes('~') || rawCanonicalSmiles.includes('*')) {
       return buildFailure(
-        `RDKit validation blocked unsupported canonical query feature: ${canonicalSmiles}.`,
+        `RDKit validation blocked unsupported canonical query feature: ${rawCanonicalSmiles}.`,
         selectedInput.source,
         'invalid',
         STUDENT_UNSUPPORTED_QUERY_MESSAGE,
         graphContext,
       );
     }
+
+    let canonicalSmiles = rawCanonicalSmiles;
 
     if (
       input.source === 'ketcher' &&
@@ -439,17 +506,43 @@ export async function validateMoleculeInput(
         );
       }
 
-      const smilesCanonicalSmiles = smilesMol.get_smiles();
+      const molBlockCanonicalSmiles = getHydrogenNormalizedCanonicalSmiles(
+        rdkit,
+        mol,
+        'mol-block',
+      );
+      const rawSmilesCanonicalSmiles = smilesMol.get_smiles();
+      const smilesAtomAnnotationAssessment = assessAtomAnnotations(
+        smilesMol.get_json(),
+      );
 
-      if (canonicalSmiles !== smilesCanonicalSmiles) {
+      if (!smilesAtomAnnotationAssessment.ok) {
         return buildFailure(
-          `Ketcher structure mismatch: mol-block canonical SMILES ${canonicalSmiles}; smiles canonical SMILES ${smilesCanonicalSmiles}.`,
+          `Ketcher smiles cross-check blocked ${smilesAtomAnnotationAssessment.developerReason}.`,
+          'smiles',
+          'invalid',
+          smilesAtomAnnotationAssessment.studentMessage,
+          graphContext,
+        );
+      }
+
+      const smilesCanonicalSmiles = getHydrogenNormalizedCanonicalSmiles(
+        rdkit,
+        smilesMol,
+        'smiles',
+      );
+
+      if (molBlockCanonicalSmiles !== smilesCanonicalSmiles) {
+        return buildFailure(
+          `Ketcher structure mismatch after explicit-hydrogen normalization: mol-block canonical SMILES ${molBlockCanonicalSmiles} (raw ${rawCanonicalSmiles}); smiles canonical SMILES ${smilesCanonicalSmiles} (raw ${rawSmilesCanonicalSmiles}).`,
           'mol-block',
           'invalid',
           STUDENT_STRUCTURE_MISMATCH_MESSAGE,
           graphContext,
         );
       }
+
+      canonicalSmiles = molBlockCanonicalSmiles;
     }
 
     if (!connectivityDecision.allowed) {
@@ -522,6 +615,13 @@ export async function validateMoleculeInput(
       errors: [],
       developerLogs: [
         `RDKit ${rdkit.version()} validated ${selectedInput.source} input.`,
+        ...(input.source === 'ketcher' &&
+        input.molBlock?.trim() &&
+        input.smiles?.trim()
+          ? [
+              `Ketcher MOL/SMILES cross-check passed with explicit-hydrogen-normalized canonical SMILES ${canonicalSmiles}.`,
+            ]
+          : []),
         ...atomAnnotationAssessment.developerLogs,
       ],
     };

@@ -9,6 +9,10 @@
 *service-account*.json
 *serviceAccount*.json
 
+# Local design source and duplicate restart material are not release inputs.
+/restart/ChatGPT Image *.png
+/재구축/
+
 # External VSEPR reference artifacts kept out of app commits.
 vsepr-engine.js
 분자구조_VSEPR_시뮬레이터.html

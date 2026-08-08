@@ -93,11 +93,13 @@ PubChem 3D loading must follow this order:
 
 1. Ketcher provides SMILES/MOL data.
 2. RDKit.js validates the current structure.
-3. The app uses a trusted query key, such as RDKit canonical SMILES or an explicit example molecule ID.
-4. PubChem candidate data is requested.
-5. Returned data is checked against the current validated structure as far as the frontend can safely do.
-6. If the external result is missing, ambiguous, or mismatched, the 3D viewer is blocked and the app asks for review.
-7. Only a coordinate-bearing, source-labeled result is passed to 3Dmol.js.
+3. For a user-drawn structure, PubChem lookup begins only after the user explicitly clicks the 3D output action. Editing, validation, or background state changes must not trigger a hidden lookup.
+4. The app submits only the RDKit.js-validated canonical SMILES as the trusted query key and requests PubChem candidate data.
+5. The user manually selects a candidate, even when PubChem returns exactly one candidate. The app must not auto-rank or auto-select it.
+6. Only after that selection may the app request the selected CID's coordinate-bearing SDF with `record_type=3d`.
+7. The returned SDF is parsed again with RDKit.js and compared with the current validated structure using the same hydrogen-normalized exact-match key.
+8. If the candidate or final SDF is missing, ambiguous, mismatched, unparsable, or stale, the 3D viewer remains blocked.
+9. Only the selected, exact-matched, coordinate-bearing, source-labeled result is passed to 3Dmol.js.
 
 For curated example molecules that already contain a trusted local `pubchemCid`
 and do not have static in-app 3D coordinates, the app may automatically request
@@ -105,6 +107,56 @@ the CID-based PubChem SDF after RDKit.js validation succeeds. This is not
 automatic matching from user-drawn structures; it is a curated example handoff
 using local metadata. Student-drawn structures still require a manual external
 candidate search and manual candidate selection.
+
+The Physical Molecule Scanner N5 flow has a narrower curated handoff. It does
+not search by a student-entered name or auto-rank PubChem candidates. After an
+explicit student action, it may request a fixed CID only when the current N4
+snapshot has one exact limited-registry identity and its revision, source
+revision, identity ID, and hydrogen-normalized canonical key all match the
+local identity-to-CID registry. The returned SDF must still pass the same
+RDKit.js exact-structure check before display. Unsupported registry entries,
+including the current H2 normalization edge, remain blocked before a request.
+
+For this scanner-only verified handoff, coordinate measurements are permitted
+with all of the following restrictions:
+
+- the payload is a current-revision, exact-matched PubChem 3D SDF;
+- the UI calls it an external-database calculated conformer Reference, not an
+  experimental, literature, optimized, or app-generated structure;
+- distance uses two atoms joined in the SDF bond table;
+- angle uses two SDF-bonded neighbors around the selected center atom;
+- every result is labeled as a calculation from the current Reference
+  coordinates and carries `reference-coordinate` evidence;
+- photo pixels and Physical Model stick lengths are never converted to Å;
+- N4 formula and molar mass remain RDKit.js results and are not sourced from
+  PubChem coordinates.
+
+This N5 measurement permission by itself does not authorize N6 comparison, correctness scoring, or
+claims that the displayed values are authoritative bond-length or bond-angle
+references.
+
+### Scanner N6 Physical/Reference comparison boundary
+
+Scanner N6 may place the student-confirmed Physical Model and the current
+exact-matched Scientific Reference in a source-labelled comparison view. It
+does not broaden the N5 coordinate policy:
+
+- the Physical photo and confirmed graph remain observation evidence only;
+- photo x/y coordinates, pixel distances, and kit stick lengths are never
+  converted to Å or degrees;
+- no Physical stable atom is paired one-to-one with an SDF atom without an
+  independently verified atom map;
+- Reference measurements keep `reference-coordinate` evidence and remain
+  measurements of the current approved SDF coordinates;
+- the app does not infer planarity, depth, correctness, or a shape answer from
+  one Physical photo;
+- comparison completion records student observations and revised explanation;
+  it is not automatic scoring or chemical validation;
+- any Physical, validation, identity, canonical, or Reference revision change
+  invalidates the comparison snapshot.
+
+N6 does not authorize classroom readiness claims, teacher scoring, submission
+analytics, or N7 release decisions.
 
 The current prototype also stores the PubChem CID SDF request URL as
 `sourceUrl` metadata on the `Molecule3DInput`. The UI must not use that URL as
@@ -114,6 +166,13 @@ teacher/source review.
 If an older PubChem candidate search or CID-based 3D SDF response returns after
 the user has validated a different structure, the app ignores that stale
 response and keeps the current RDKit.js validation result and 3D state.
+
+The user-drawn handoff is fail-closed. Network failure, timeout, malformed
+responses, missing 3D coordinates, a changed RDKit validation key, or any
+candidate/SDF mismatch must preserve the current 2D structure while withholding
+external 3D output. The request must contain structure query data only; it must
+not include student names, class identifiers, learning records, or authentication
+tokens. Cached or late responses must not be reused for a different structure.
 
 ## Actual/External 3D vs VSEPR Comparison Mode
 
@@ -169,8 +228,9 @@ Developer logs should include enough detail for debugging:
 
 The current MVP must not implement:
 
-- automatic PubChem matching from user-drawn structures
+- hidden, validation-triggered, or edit-triggered PubChem lookup for user-drawn structures
 - automatic selection of a PubChem candidate
+- bypassing the final RDKit.js revalidation and hydrogen-normalized exact-match gate
 - PubChem values replacing RDKit.js formula or molecular weight
 - Open Babel backend conversion
 - RDKit 3D conformer generation
@@ -200,4 +260,5 @@ literature, or optimized geometry values.
 ## Sources Checked
 
 - PubChem PUG-REST documentation: https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest
+- PubChem PUG-REST tutorial: https://pubchem.ncbi.nlm.nih.gov/docs/pug-rest-tutorial
 - 3Dmol.js documentation: https://3dmol.org/doc/index.html

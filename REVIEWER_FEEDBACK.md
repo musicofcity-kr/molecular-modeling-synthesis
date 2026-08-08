@@ -142,7 +142,8 @@
 
 ## 참고 사항 (결함 단정 아님 — 모바일 E3 증거 만들 때 함께 확인 요청)
 
-- **모바일 3D 뷰어 전환**: `ShapeViewerSection`의 뷰어 전환은 CSS `display:none`(`global.css` L3685~L3688)으로 숨깁니다. 3Dmol 캔버스가 **0×0 상태에서 초기화**된 뒤 전환으로 노출될 때 `ResizeObserver → viewer.resize()`만으로 정상 렌더되는지 390×844 실기기/에뮬레이션에서 확인해 주세요. 코드만으로는 판단이 어렵습니다.
+- ✅ **해결 확인 (2026-07-28 07:55)**: 이 항목은 실제 결함이었고 `d2d7b5d fix: restore structure analysis 3d flow`에서 수정된 것을 확인했습니다. 두 뷰어가 host의 **width·height가 모두 0 초과일 때만** `rendered` 상태가 되고, `display:none` → 표시 전환 시 `ResizeObserver`가 다시 크기를 맞춰 렌더합니다. 초기화 직후 `handleResize()` 선행 호출과 에러 시 `setModelRendered(false)`도 확인했습니다. 회귀 테스트 3건(`requires a nonzero host before marking a VSEPR model as rendered` 등)과 모바일 E2E(canvas backing width/height > 0)까지 붙어 있어 닫힌 것으로 봅니다. 감시자 검증: `typecheck` ✅ / `npm test` ✅ **55 files / 396 tests**(QA 리포트 수치와 일치).
+- **모바일 3D 뷰어 전환**(원 지적): `ShapeViewerSection`의 뷰어 전환은 CSS `display:none`(`global.css` L3685~L3688)으로 숨깁니다. 3Dmol 캔버스가 **0×0 상태에서 초기화**된 뒤 전환으로 노출될 때 `ResizeObserver → viewer.resize()`만으로 정상 렌더되는지 390×844 실기기/에뮬레이션에서 확인해 주세요. 코드만으로는 판단이 어렵습니다.
 - **`role="tab"` 사용**: `mobile-viewer-switch`의 버튼은 `role="tab"`/`aria-selected`를 쓰지만 대응하는 `role="tabpanel"`·`aria-controls`가 없고 좌우 화살표 키 이동도 없습니다. 계획하신 axe/키보드 검사에서 함께 보시고, 완전한 탭 패턴을 구현할 게 아니라면 `role="tablist"/"tab"`을 떼고 `aria-pressed` 토글 버튼(=`KetcherEditor`의 모드 버튼과 동일한 방식)으로 통일하는 편이 단순합니다.
 - **`Molecule3DViewer`의 `showAdvancedControls`**: `App.tsx` L2145가 `userMode === 'student' || isTeacherOrAdvancedView`로 바뀌었습니다. `UserMode = 'student' | 'teacher'`이므로 결과적으로 **학생에게는 항상 노출, 인증되지 않은 교사에게는 미노출**이 됩니다. 의도한 정책이면 그대로 두시고, 아니라면 조건식을 정리해 주세요(의도가 "모두 노출"이면 그냥 `true`).
 
@@ -191,6 +192,23 @@
   1. **알짜 전하 기준으로 전환** — `atoms.reduce(sum of chg)`가 0이면 통과(오존·나이트로·N-옥사이드 회복), 0이 아니면 현재 정책 유지. 동위원소·라디칼 차단은 그대로.
   2. 알짜 전하 ≠ 0인 단순 이온(NH4⁺·H3O⁺)도 허용하되 confidence를 낮추고 경고 표시(엔진은 이미 처리 가능).
   3. 정책상 전하 화학종을 계속 막을 거라면, **메시지를 조건별로 분리**("이 구조는 중성이지만 공명 표기상 전하가 분리되어 있어 현재 계산 범위 밖입니다")하고 `VSEPR_ENGINE_POLICY.md`의 Unsupported 목록에 전하 화학종을 추가해 문서 불일치를 없애 주세요. 어느 쪽이든 회귀 테스트 1건은 필요합니다.
+
+## 커밋 `3b5c55e` 건강검진 (2026-07-27 23:50, 감시자 실행)
+
+클린 트리에서 실행했습니다. **결함 없음** — 아래는 참고 정보입니다.
+
+| 명령 | 결과 |
+|---|---|
+| `npm run typecheck` | ✅ 통과 |
+| `npm test` | ✅ **54 files / 392 tests** |
+| `npm run build` | ✅ 성공 (43.5s) |
+
+- ✅ `.agents.zip`은 커밋 전에 삭제되어 동반 커밋되지 않았습니다(3회 경고했던 항목 해소). `main`에 직접 쌓지 않고 `agent/apply-molecule-workbench-skills` 브랜치로 분리한 것도 이전 지적(배포 대상 브랜치 보호) 대비 개선입니다.
+- ⚠️ 다만 **177파일 +15,680/−2,036이 한 커밋**에, 메시지는 한 줄이고 본문이 없습니다(`src` 73 · `e2e` 9 · `api` 4 · `.agents/skills` 36 · QA 스크린샷 10 · 문서). 이 저장소 최대 커밋이라 회귀 시 bisect·부분 되돌리기가 어렵습니다. 다음부터는 최소한 (앱 코드) / (스킬 패키지) / (QA 증거·문서)로 나눠 주시면 좋겠습니다.
+- 📉 초기 번들이 커졌습니다: 메인 `index-*.js`가 **466KB/gzip 142KB → 1,188KB/gzip 323KB**. Ketcher·3Dmol 지연 로딩은 그대로 유지되고 있으니 결함은 아니지만, 학교망 동시 접속을 감안해 성능 순회 때 한 번 보시면 좋겠습니다.
+- 참고: `docs/qa-screenshots/`가 tracked가 되어 이제 `npm run test:e2e` 실행이 추적 파일을 변경시킵니다. 감시자는 계속 E2E를 실행하지 않겠습니다.
+
+---
 
 ## 참고 사항 (결함 단정 아님)
 

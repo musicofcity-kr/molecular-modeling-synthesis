@@ -4,7 +4,9 @@ import {
   calculateAngleDegree,
   calculateDistanceAngstrom,
   getRequiredAtomCount,
+  isBondedMeasurementSelection,
   parseAtomsFromMolecule3DInput,
+  parseBondedAtomPairsFromMolecule3DInput,
 } from './geometryMeasurement';
 import type { SelectedAtom3D } from '../types/molecule';
 
@@ -44,6 +46,29 @@ describe('geometryMeasurement', () => {
       { atomIndex: 2, element: 'H', x: 0.9572, y: 0, z: 0 },
       { atomIndex: 3, element: 'H', x: -0.239, y: 0.927, z: 0 },
     ]);
+  });
+
+  it('parses the SDF bond table and permits only bonded distance and centered angle selections', () => {
+    const input = {
+      format: 'sdf' as const,
+      data: waterSdf,
+      label: '물',
+      sourceType: 'pubchem' as const,
+      coordinateDimension: '3d' as const,
+      structureMatchStatus: 'verified' as const,
+      coordinateSource: 'PubChem CID 962',
+    };
+    const pairs = parseBondedAtomPairsFromMolecule3DInput(input);
+
+    expect(pairs).toEqual([
+      [1, 2],
+      [1, 3],
+    ]);
+    expect(isBondedMeasurementSelection('bond_length', [1, 2], pairs)).toBe(true);
+    expect(isBondedMeasurementSelection('bond_length', [2, 3], pairs)).toBe(false);
+    expect(isBondedMeasurementSelection('bond_angle', [2, 1, 3], pairs)).toBe(true);
+    expect(isBondedMeasurementSelection('bond_angle', [1, 2, 3], pairs)).toBe(false);
+    expect(isBondedMeasurementSelection('bond_angle', [2, 1, 2], pairs)).toBe(false);
   });
 
   it('ignores V2000 text in the title and reads coordinates from the standard counts line', () => {

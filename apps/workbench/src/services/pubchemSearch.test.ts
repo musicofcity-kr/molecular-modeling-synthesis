@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   evaluatePubChemCandidateForCurrentStructure,
+  evaluatePubChemCandidateWithRdkitForCurrentStructure,
   searchPubChemCandidatesByCanonicalSmiles,
 } from './pubchemSearch';
 
@@ -146,6 +147,53 @@ describe('searchPubChemCandidatesByCanonicalSmiles', () => {
     expect(result.developerLogs).toContain(
       'PubChem candidate search failed before request: empty canonicalSmiles.',
     );
+  });
+
+  it('aborts a candidate search that exceeds the configured timeout', async () => {
+    vi.useFakeTimers();
+
+    try {
+      const fetchImpl = vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => {
+                const abortError = new Error('request aborted by signal');
+                abortError.name = 'AbortError';
+                reject(abortError);
+              },
+              { once: true },
+            );
+          }),
+      );
+
+      const resultPromise = searchPubChemCandidatesByCanonicalSmiles(
+        'CCO',
+        fetchImpl,
+        { timeoutMs: 25 },
+      );
+
+      await vi.advanceTimersByTimeAsync(25);
+      const result = await resultPromise;
+
+      expect(fetchImpl).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+        }),
+      );
+      expect(result.ok).toBe(false);
+      expect(result.status).toBe('error');
+      expect(result.developerLogs).toContain(
+        'request timeout: aborted after 25 ms.',
+      );
+      expect(result.developerLogs.join('\n')).toContain(
+        'error message: request aborted by signal',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -502,5 +550,157 @@ describe('evaluatePubChemCandidateForCurrentStructure', () => {
 
     expect(result.canLoad3D).toBe(false);
     expect(result.studentMessage).toContain('RDKit.js 검증을 통과해야 합니다');
+  });
+});
+
+describe('evaluatePubChemCandidateWithRdkitForCurrentStructure', () => {
+  it('allows Kekule benzene metadata for an aromatic RDKit canonical structure', async () => {
+    const result =
+      await evaluatePubChemCandidateWithRdkitForCurrentStructure(
+        {
+          cid: 241,
+          title: 'Benzene',
+          molecularFormula: 'C6H6',
+          canonicalSmiles: 'C1=CC=CC=C1',
+          source: 'pubchem',
+        },
+        {
+          ok: true,
+          validationStatus: 'valid',
+          source: 'smiles',
+          smiles: 'c1ccccc1',
+          canonicalSmiles: 'c1ccccc1',
+          molecularFormula: 'C6H6',
+          molecularWeight: 78.114,
+          warnings: [],
+          errors: [],
+          developerLogs: [],
+        },
+      );
+
+    expect(result.canLoad3D).toBe(true);
+    expect(result.structureMatchStatus).toBe('verified');
+    expect(result.developerLogs).toContain(
+      'candidate allowed: shared RDKit normalization verified the structure.',
+    );
+  });
+
+  it('allows an atom-order-equivalent candidate after shared RDKit normalization', async () => {
+    const result =
+      await evaluatePubChemCandidateWithRdkitForCurrentStructure(
+        {
+          cid: 702,
+          title: 'Ethanol',
+          molecularFormula: 'C2H6O',
+          canonicalSmiles: 'OCC',
+          source: 'pubchem',
+        },
+        {
+          ok: true,
+          validationStatus: 'valid',
+          source: 'smiles',
+          smiles: 'CCO',
+          canonicalSmiles: 'CCO',
+          molecularFormula: 'C2H6O',
+          molecularWeight: 46.069,
+          warnings: [],
+          errors: [],
+          developerLogs: [],
+        },
+      );
+
+    expect(result.canLoad3D).toBe(true);
+    expect(result.structureMatchStatus).toBe('verified');
+  });
+
+  it('still blocks a constitutional isomer after shared RDKit normalization', async () => {
+    const result =
+      await evaluatePubChemCandidateWithRdkitForCurrentStructure(
+        {
+          cid: 8254,
+          title: 'Dimethyl ether',
+          molecularFormula: 'C2H6O',
+          canonicalSmiles: 'COC',
+          source: 'pubchem',
+        },
+        {
+          ok: true,
+          validationStatus: 'valid',
+          source: 'smiles',
+          smiles: 'CCO',
+          canonicalSmiles: 'CCO',
+          molecularFormula: 'C2H6O',
+          molecularWeight: 46.069,
+          warnings: [],
+          errors: [],
+          developerLogs: [],
+        },
+      );
+
+    expect(result.canLoad3D).toBe(false);
+    expect(result.developerLogs).toContain(
+      'candidate blocked: RDKit-normalized canonical SMILES mismatch.',
+    );
+  });
+
+  it('keeps an opposite explicit stereoisomer blocked', async () => {
+    const result =
+      await evaluatePubChemCandidateWithRdkitForCurrentStructure(
+        {
+          cid: 107689,
+          title: 'Opposite lactic acid stereoisomer',
+          molecularFormula: 'C3H6O3',
+          canonicalSmiles: 'CC(O)C(=O)O',
+          isomericSmiles: 'C[C@@H](O)C(=O)O',
+          source: 'pubchem',
+        },
+        {
+          ok: true,
+          validationStatus: 'valid',
+          source: 'smiles',
+          smiles: 'C[C@H](O)C(=O)O',
+          canonicalSmiles: 'C[C@H](O)C(=O)O',
+          molecularFormula: 'C3H6O3',
+          molecularWeight: 90.078,
+          warnings: [],
+          errors: [],
+          developerLogs: [],
+        },
+      );
+
+    expect(result.canLoad3D).toBe(false);
+    expect(result.developerLogs).toContain(
+      'candidate blocked: stereochemistry mismatch.',
+    );
+  });
+
+  it('blocks an invalid candidate structure string', async () => {
+    const result =
+      await evaluatePubChemCandidateWithRdkitForCurrentStructure(
+        {
+          cid: 999999,
+          title: 'Invalid structure metadata',
+          molecularFormula: 'C2H6O',
+          canonicalSmiles: 'not-a-smiles',
+          source: 'pubchem',
+        },
+        {
+          ok: true,
+          validationStatus: 'valid',
+          source: 'smiles',
+          smiles: 'CCO',
+          canonicalSmiles: 'CCO',
+          molecularFormula: 'C2H6O',
+          molecularWeight: 46.069,
+          warnings: [],
+          errors: [],
+          developerLogs: [],
+        },
+      );
+
+    expect(result.canLoad3D).toBe(false);
+    expect(result.developerLogs).toContain(
+      'candidate blocked: candidate SMILES failed shared RDKit validation.',
+    );
   });
 });
