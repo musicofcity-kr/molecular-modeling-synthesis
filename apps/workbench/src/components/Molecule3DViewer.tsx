@@ -54,6 +54,8 @@ export function emitMolecule3DRenderState(
 type Molecule3DViewerProps = {
   coordinateData?: Molecule3DInput | null;
   hasValidatedStructure: boolean;
+  backgroundColor?: string;
+  initialZoom?: number;
   validatedStructureKey?: string;
   userMode?: UserMode;
   showAdvancedControls?: boolean;
@@ -94,6 +96,27 @@ type ThreeDmolAtomLike = {
 };
 
 type ViewerHostSize = Pick<HTMLElement, 'clientWidth' | 'clientHeight'>;
+
+type Molecule3DInitialViewViewer = {
+  zoomTo(): unknown;
+  zoom(factor: number): unknown;
+  getView(): any[];
+};
+
+export function getMolecule3DViewerOptions(backgroundColor = 'white') {
+  return { backgroundColor };
+}
+
+export function initializeMolecule3DViewerView(
+  viewer: Molecule3DInitialViewViewer,
+  initialZoom = 1,
+): any[] {
+  viewer.zoomTo();
+  if (initialZoom !== 1) {
+    viewer.zoom(initialZoom);
+  }
+  return viewer.getView();
+}
 
 export function hasRenderableMoleculeViewerSize(
   host: ViewerHostSize | null,
@@ -277,6 +300,8 @@ export const Molecule3DViewer = forwardRef<
   {
     coordinateData = null,
     hasValidatedStructure,
+    backgroundColor = 'white',
+    initialZoom = 1,
     validatedStructureKey,
     userMode = 'student',
     showAdvancedControls,
@@ -531,8 +556,7 @@ export const Molecule3DViewer = forwardRef<
     viewer.clear();
     viewer.addModel(input.data, get3DmolModelFormat(input.format));
     applyViewerPresentation(viewer, atoms);
-    viewer.zoomTo();
-    initialViewRef.current = viewer.getView();
+    initialViewRef.current = initializeMolecule3DViewerView(viewer, initialZoom);
     viewer.render();
     updateModelRendered(true);
     setStudentMessage(`${input.label}의 교육용 3D 자료를 표시합니다.`);
@@ -551,7 +575,14 @@ export const Molecule3DViewer = forwardRef<
       rotate: rotateViewer,
       zoom: zoomViewer,
     }),
-    [atomSelectionMode, modelRendered, representationMode, showAtomLabels, userMode],
+    [
+      atomSelectionMode,
+      initialZoom,
+      modelRendered,
+      representationMode,
+      showAtomLabels,
+      userMode,
+    ],
   );
 
   useEffect(() => {
@@ -586,9 +617,10 @@ export const Molecule3DViewer = forwardRef<
           return;
         }
 
-        viewerRef.current = threeDmol.createViewer(hostRef.current, {
-          backgroundColor: 'white',
-        });
+        viewerRef.current = threeDmol.createViewer(
+          hostRef.current,
+          getMolecule3DViewerOptions(backgroundColor),
+        );
         viewerRef.current.render();
         setViewerStatus('ready');
         handleResize();
@@ -616,7 +648,7 @@ export const Molecule3DViewer = forwardRef<
       clearViewer();
       viewerRef.current = null;
     };
-  }, [onDeveloperLog]);
+  }, [backgroundColor, onDeveloperLog]);
 
   useEffect(() => {
     if (viewerStatus !== 'ready') {
@@ -675,7 +707,7 @@ export const Molecule3DViewer = forwardRef<
       setStudentMessage('3D 자료를 표시하지 못했습니다.');
       onDeveloperLog?.(`3Dmol.js structure load failed: ${getErrorMessage(error)}`);
     }
-  }, [coordinateData, hasRenderableSize, onDeveloperLog, viewerStatus]);
+  }, [coordinateData, hasRenderableSize, initialZoom, onDeveloperLog, viewerStatus]);
 
   useEffect(() => {
     if (

@@ -7,6 +7,13 @@ import {
   type ChangeEvent,
   type MouseEvent,
 } from 'react';
+import { AtomIcon } from '@phosphor-icons/react/dist/csr/Atom';
+import { CameraIcon } from '@phosphor-icons/react/dist/csr/Camera';
+import { CheckIcon } from '@phosphor-icons/react/dist/csr/Check';
+import { CheckCircleIcon } from '@phosphor-icons/react/dist/csr/CheckCircle';
+import { CubeIcon } from '@phosphor-icons/react/dist/csr/Cube';
+import { FlaskIcon } from '@phosphor-icons/react/dist/csr/Flask';
+import { ImageIcon } from '@phosphor-icons/react/dist/csr/Image';
 import {
   detectAtomCandidates,
   SUPPORTED_ELEMENTS,
@@ -125,6 +132,7 @@ export function PhysicalMoleculeScanner() {
   const [hasComparedWholeModel, setHasComparedWholeModel] = useState(false);
   const [message, setMessage] = useState('사진을 선택하면 원자처럼 보이는 영역을 후보로 표시합니다.');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const nextManualIdRef = useRef(1);
   const analysisRequestRef = useRef(0);
 
@@ -206,7 +214,11 @@ export function PhysicalMoleculeScanner() {
       setLoadedImage(result.loadedImage);
       setCandidates(result.candidates);
       setSelectedId(result.candidates[0]?.id ?? null);
-      setIsDemo(demo || file.name.toLowerCase() === 'demo-methane.svg');
+      setIsDemo(
+        demo ||
+          file.name.toLowerCase() === 'demo-methane.svg' ||
+          file.name.toLowerCase() === 'demo-methane-photo.png',
+      );
       setMessage(
         result.candidates.length > 0
           ? `${result.candidates.length}개의 원자 후보를 찾았습니다. 모두 직접 확인해 주세요.`
@@ -250,11 +262,11 @@ export function PhysicalMoleculeScanner() {
     setConfirmedComparison(null);
     setHasComparedWholeModel(false);
     try {
-      const response = await fetch('/scanner-fixtures/demo-methane.svg');
+      const response = await fetch('/scanner-fixtures/demo-methane-photo.png');
       if (!response.ok) throw new Error('DEMO 사진을 불러오지 못했습니다.');
       const blob = await response.blob();
       if (requestId !== analysisRequestRef.current) return;
-      await processFile(new File([blob], 'demo-methane.svg', { type: 'image/svg+xml' }), true);
+      await processFile(new File([blob], 'demo-methane-photo.png', { type: 'image/png' }), true);
     } catch (error) {
       if (requestId !== analysisRequestRef.current) return;
       setMessage(error instanceof Error ? error.message : 'DEMO 사진을 불러오지 못했습니다.');
@@ -354,18 +366,110 @@ export function PhysicalMoleculeScanner() {
     setConfirmedComparison(null);
   }, []);
 
-  const activeStage = isComparisonStageStarted
-    ? 6
-    : isReferenceStageStarted
-      ? 5
-    : isChemistryValidationStarted
-      ? 4
-      : isBondReviewStarted
-        ? 3
-        : 2;
+  const activeStage = !loadedImage
+    ? 1
+    : isComparisonStageStarted
+      ? 6
+      : isReferenceStageStarted
+        ? 5
+        : isChemistryValidationStarted
+          ? 4
+          : isBondReviewStarted
+            ? 3
+            : 2;
+  const activeStageLabel = [
+    '사진 선택',
+    '원자 확인',
+    '결합 확인',
+    '구조 검증',
+    'Reference 3D',
+    '구조 비교',
+  ][activeStage - 1];
+  const progressSteps = [
+    { label: '사진 선택', status: loadedImage ? 'done' : 'active' },
+    { label: '원자 확인', status: isComplete ? 'done' : loadedImage ? 'active' : '' },
+    { label: '결합 확인', status: activeStage > 3 ? 'done' : activeStage === 3 ? 'active' : '' },
+    { label: '구조 검증', status: activeStage > 4 ? 'done' : activeStage === 4 ? 'active' : '' },
+    { label: 'Reference 3D', status: activeStage > 5 ? 'done' : activeStage === 5 ? 'active' : '' },
+    { label: '구조 비교', status: activeStage === 6 ? 'active' : '' },
+  ] as const;
 
   return (
-    <main className="scanner-shell" data-testid="scanner-shell">
+    <main
+      className="scanner-shell"
+      data-active-stage={activeStage}
+      data-stage={activeStage}
+      data-testid="scanner-shell"
+    >
+      <header className="scanner-app-header">
+        <div className="scanner-brand">
+          <span className="scanner-brand-mark" aria-hidden="true">
+            <AtomIcon size={30} weight="duotone" />
+          </span>
+          <div>
+            <strong>Physical Molecule Scanner</strong>
+            <span>실물 분자 모형과 과학적 Reference를 비교하는 학습 도구</span>
+          </div>
+        </div>
+        <div className="scanner-stage-badge" aria-label={`현재 ${activeStage}/6 단계, ${activeStageLabel}`}>
+          <strong>{activeStage}/6</strong>
+          <span>{activeStageLabel}</span>
+        </div>
+      </header>
+
+      <input
+        ref={fileInputRef}
+        id="scanner-file-input"
+        data-testid="scanner-image-input"
+        className="scanner-visually-hidden"
+        type="file"
+        accept="image/*"
+        onChange={handleFileChange}
+      />
+      <input
+        ref={cameraInputRef}
+        id="scanner-camera-input"
+        data-testid="scanner-camera-input"
+        className="scanner-visually-hidden"
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={handleFileChange}
+      />
+
+      {activeStage === 1 && (
+        <section
+          className="scanner-start-hero"
+          data-testid="scanner-stage-one"
+          aria-labelledby="scanner-start-title"
+        >
+          <div className="scanner-start-copy">
+            <span className="scanner-start-kicker">
+              <FlaskIcon size={18} weight="duotone" aria-hidden="true" />
+              Interactive Lab
+            </span>
+            <h1 id="scanner-start-title">내가 만든 분자를 3D로 탐색해 보세요</h1>
+            <p>
+              분자 모형을 촬영하면 원자와 결합을 직접 확인한 뒤, 검증된 Scientific Reference와
+              비교할 수 있습니다.
+            </p>
+            <ul className="scanner-start-steps" aria-label="활동 흐름">
+              <li><CameraIcon size={20} weight="duotone" aria-hidden="true" /> 촬영</li>
+              <li><CheckCircleIcon size={20} weight="duotone" aria-hidden="true" /> 직접 확인</li>
+              <li><CubeIcon size={20} weight="duotone" aria-hidden="true" /> 3D 비교</li>
+            </ul>
+          </div>
+          <div className="scanner-start-visual">
+            <img
+              src="/scanner-assets/methane-kit-hero.png"
+              data-testid="scanner-stage-one-hero"
+              alt="검은색 탄소 원자와 흰색 수소 원자로 만든 메테인 분자 모형"
+            />
+            <span><AtomIcon size={18} weight="duotone" aria-hidden="true" /> Physical Model</span>
+          </div>
+        </section>
+      )}
+
       <header className="scanner-hero">
         <div>
           <p className="scanner-eyebrow">실물 분자 모형 스캐너 · {activeStage}단계</p>
@@ -395,43 +499,74 @@ export function PhysicalMoleculeScanner() {
         {isDemo && <span className="scanner-demo-badge" data-testid="scanner-demo-badge">DEMO 자료</span>}
       </header>
 
-      <ol className="scanner-progress" aria-label="스캔 진행 단계">
-        <li className={loadedImage ? 'done' : 'active'}>1. 사진 선택</li>
-        <li className={isComplete ? 'done' : loadedImage ? 'active' : ''}>2. 원자 확인</li>
-        <li className={activeStage > 3 ? 'done' : activeStage === 3 ? 'active' : ''} aria-disabled={activeStage < 3}>3. 결합 확인</li>
-        <li className={activeStage > 4 ? 'done' : activeStage === 4 ? 'active' : ''} aria-disabled={activeStage < 4}>4. 구조 검증</li>
-        <li className={activeStage > 5 ? 'done' : activeStage === 5 ? 'active' : ''} aria-disabled={activeStage < 5}>5. Reference 3D</li>
-        <li className={activeStage === 6 ? 'active' : ''} aria-disabled={activeStage < 6}>6. 구조 비교</li>
-      </ol>
+      {activeStage > 1 && (
+        <>
+          <div className="scanner-mobile-stage-heading" aria-hidden="true">
+            <strong>{activeStage}/6</strong>
+            <span>{activeStageLabel}</span>
+          </div>
+          <ol className="scanner-progress" data-testid="scanner-progress-rail" aria-label="스캔 진행 단계">
+            {progressSteps.map((step, index) => (
+              <li
+                key={step.label}
+                data-testid="scanner-progress-item"
+                className={step.status}
+                aria-current={step.status === 'active' ? 'step' : undefined}
+                aria-disabled={activeStage < index + 1 || undefined}
+              >
+                <span className="scanner-progress-node" aria-hidden="true">
+                  {step.status === 'done' ? (
+                    <CheckIcon size={13} weight="bold" />
+                  ) : (
+                    index + 1
+                  )}
+                </span>
+                <span>{index + 1}. {step.label}</span>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
 
-      <section className="scanner-card scanner-upload-card" aria-labelledby="scanner-upload-title">
+      <section
+        className="scanner-card scanner-upload-card"
+        data-testid="scanner-upload-card"
+        aria-labelledby="scanner-upload-title"
+      >
         <div>
           <h2 id="scanner-upload-title">1. 분자 모형 사진 선택</h2>
           <p>가능하면 단색 배경에서 구가 겹치지 않게 찍어 주세요. 사진은 브라우저 안에서만 처리됩니다.</p>
           <p>DEMO 색상표를 기준으로 찾으므로 다른 색 키트, 그림자, 겹친 원자는 직접 고쳐야 합니다.</p>
         </div>
         <div className="scanner-upload-actions">
-          <label className="scanner-primary-button" htmlFor="scanner-file-input">
-            {loadedImage ? '다른 사진 선택' : '사진 찍기 또는 선택'}
-          </label>
-          <input
-            ref={fileInputRef}
-            id="scanner-file-input"
-            data-testid="scanner-image-input"
-            className="scanner-visually-hidden"
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={handleFileChange}
-          />
+          <button
+            type="button"
+            className="scanner-primary-button"
+            data-testid={activeStage === 1 ? 'scanner-stage-one-primary-action' : undefined}
+            disabled={isAnalyzing}
+            onClick={() => cameraInputRef.current?.click()}
+          >
+            <CameraIcon size={22} weight="bold" aria-hidden="true" />
+            분자 촬영하기
+          </button>
           <button
             type="button"
             className="scanner-secondary-button"
+            data-testid="scanner-gallery-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isAnalyzing}
+          >
+            <ImageIcon size={21} weight="duotone" aria-hidden="true" />
+            사진 불러오기
+          </button>
+          <button
+            type="button"
+            className="scanner-tertiary-button"
             data-testid="scanner-demo-button"
             onClick={() => void loadDemo()}
             disabled={isAnalyzing}
           >
-            DEMO 사진 사용
+            DEMO로 체험
           </button>
         </div>
       </section>
@@ -448,7 +583,19 @@ export function PhysicalMoleculeScanner() {
                 <h2 id="scanner-review-title">2. 원자 후보 직접 확인</h2>
                 <p>{loadedImage.name} · 원본 {loadedImage.width} × {loadedImage.height} px</p>
               </div>
-              <strong data-testid="scanner-confirmation-status">{confirmedCount}/{candidates.length} 확인</strong>
+              <div className="scanner-heading-actions">
+                <strong data-testid="scanner-confirmation-status">{confirmedCount}/{candidates.length} 확인</strong>
+                <button
+                  type="button"
+                  className="scanner-secondary-button scanner-change-image-button"
+                  data-testid="scanner-change-image-button"
+                  disabled={isAnalyzing}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <CameraIcon size={18} weight="bold" aria-hidden="true" />
+                  다른 사진 선택
+                </button>
+              </div>
             </div>
 
             <div

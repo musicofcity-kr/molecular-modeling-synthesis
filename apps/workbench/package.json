@@ -19,6 +19,7 @@
     "test:firestore-rules": "npx firebase-tools@15.22.4 --config ../../firebase.json emulators:exec --only firestore --project demo-molecule-workbench \"vitest run src/services/firebase/firestoreRules.emulator.test.ts\""
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@rdkit/rdkit": "^2025.3.4-1.0.0",
     "3dmol": "^2.5.5",
     "firebase": "^12.15.0",

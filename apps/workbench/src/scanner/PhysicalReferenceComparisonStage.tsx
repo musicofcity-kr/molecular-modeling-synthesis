@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { CameraIcon } from '@phosphor-icons/react/dist/csr/Camera';
+import { CubeIcon } from '@phosphor-icons/react/dist/csr/Cube';
 import { Molecule3DViewer } from '../components/Molecule3DViewer';
 import type { ConfirmedPhysicalGraphSnapshot } from './BondConfirmationStage';
 import type { PhysicalGraphValidationResult } from './physicalGraphValidation';
@@ -204,50 +206,62 @@ export function PhysicalReferenceComparisonStage({
           data-source="physical-model"
         >
           <header>
-            <span aria-hidden="true">📷</span>
+            <span className="scanner-comparison-panel-icon" aria-hidden="true">
+              <CameraIcon size={24} weight="duotone" />
+            </span>
             <div>
               <h3>내가 만든 Physical Model</h3>
               <strong>학생이 확인한 사진과 연결 구조</strong>
             </div>
           </header>
-          <div className="scanner-comparison-physical-image">
-            <img src={image.url} alt="학생이 촬영한 Physical Model 사진" />
-            <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
-              {graph.bonds.map((bond) => {
-                const from = graph.atoms.find(({ id }) => id === bond.atomIds[0]);
-                const to = graph.atoms.find(({ id }) => id === bond.atomIds[1]);
-                if (!from || !to) return null;
-                return (
-                  <line
-                    key={bond.id}
-                    x1={from.x * 1000}
-                    y1={from.y * 1000}
-                    x2={to.x * 1000}
-                    y2={to.y * 1000}
-                  />
-                );
-              })}
-            </svg>
-            {graph.atoms.map((atom) => (
-              <span
-                key={atom.id}
-                className="scanner-comparison-physical-atom"
-                style={{ left: `${atom.x * 100}%`, top: `${atom.y * 100}%` }}
-                aria-hidden="true"
-              >
-                {atom.element}
-              </span>
-            ))}
+          <div className="scanner-comparison-source-label">
+            <span>PHYSICAL MODEL</span>
+            <strong>학생 촬영 · 직접 확인</strong>
           </div>
-          <p className="scanner-comparison-graph-summary">
-            원자 {result.comparison.sharedVerifiedGraph.atomCount}개 · 결합{' '}
-            {result.comparison.sharedVerifiedGraph.bondCount}개 · 학생이 직접 확인한 연결 기록
-          </p>
-          <p className="scanner-comparison-source-note">
-            이 사진은 한 방향에서 본 모형입니다. 사진 속 픽셀 거리와 모형 막대 길이는 실제
-            결합길이가 아니며, 사진 한 장만으로 앞뒤 깊이나 모든 원자가 같은 평면에 있는지
-            확정할 수 없습니다.
-          </p>
+          <ul className="scanner-comparison-metric-chips" aria-label="Physical Model 확인 요약">
+            <li>원자 <strong>{result.comparison.sharedVerifiedGraph.atomCount}개</strong></li>
+            <li>결합 <strong>{result.comparison.sharedVerifiedGraph.bondCount}개</strong></li>
+            <li>근거 <strong>학생 확인</strong></li>
+          </ul>
+          <div className="scanner-comparison-media scanner-comparison-physical-media">
+            <div className="scanner-comparison-physical-image">
+              <img src={image.url} alt="학생이 촬영한 Physical Model 사진" />
+              <svg viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true">
+                {graph.bonds.map((bond) => {
+                  const from = graph.atoms.find(({ id }) => id === bond.atomIds[0]);
+                  const to = graph.atoms.find(({ id }) => id === bond.atomIds[1]);
+                  if (!from || !to) return null;
+                  return (
+                    <line
+                      key={bond.id}
+                      x1={from.x * 1000}
+                      y1={from.y * 1000}
+                      x2={to.x * 1000}
+                      y2={to.y * 1000}
+                    />
+                  );
+                })}
+              </svg>
+              {graph.atoms.map((atom) => (
+                <span
+                  key={atom.id}
+                  className="scanner-comparison-physical-atom"
+                  style={{ left: `${atom.x * 100}%`, top: `${atom.y * 100}%` }}
+                  aria-hidden="true"
+                >
+                  {atom.element}
+                </span>
+              ))}
+            </div>
+          </div>
+          <details className="scanner-comparison-source-details">
+            <summary>출처와 한계</summary>
+            <p>
+              이 사진은 한 방향에서 본 모형입니다. 사진 속 픽셀 거리와 모형 막대 길이는 실제
+              결합길이가 아니며, 사진 한 장만으로 앞뒤 깊이나 모든 원자가 같은 평면에 있는지
+              확정할 수 없습니다.
+            </p>
+          </details>
         </article>
 
         <article
@@ -256,28 +270,43 @@ export function PhysicalReferenceComparisonStage({
           data-source="scientific-reference"
         >
           <header>
-            <span aria-hidden="true">🧭</span>
+            <span className="scanner-comparison-panel-icon" aria-hidden="true">
+              <CubeIcon size={24} weight="duotone" />
+            </span>
             <div>
               <h3>Scientific Reference 3D</h3>
               <strong>PubChem 계산 conformer · 외부 데이터베이스</strong>
             </div>
           </header>
-          <p className="scanner-comparison-reference-source">
-            좌표 출처: {referenceSnapshot.molecule3D.coordinateSource}
-          </p>
-          <Molecule3DViewer
-            coordinateData={referenceSnapshot.molecule3D}
-            hasValidatedStructure
-            validatedStructureKey={referenceSnapshot.canonicalSmiles}
-            userMode="student"
-            showAdvancedControls={false}
-            showMeasurementControls={false}
-            testIdNamespace="scanner-comparison-reference"
-          />
-          <p className="scanner-comparison-source-note">
-            현재 검증한 연결 구조와 일치하는 Reference 좌표입니다. 실험에서 직접 측정한
-            구조나 정답 모형이 아니며, 사진이나 Physical Model의 거리에서 만든 자료도 아닙니다.
-          </p>
+          <div className="scanner-comparison-source-label">
+            <span>SCIENTIFIC REFERENCE</span>
+            <strong>{referenceSnapshot.molecule3D.coordinateSource}</strong>
+          </div>
+          <ul className="scanner-comparison-metric-chips" aria-label="Scientific Reference 확인 요약">
+            <li>원자 <strong>{result.comparison.sharedVerifiedGraph.atomCount}개</strong></li>
+            <li>결합 <strong>{result.comparison.sharedVerifiedGraph.bondCount}개</strong></li>
+            <li>구조 <strong>일치 검증</strong></li>
+          </ul>
+          <div className="scanner-comparison-media scanner-comparison-reference-media">
+            <Molecule3DViewer
+              coordinateData={referenceSnapshot.molecule3D}
+              hasValidatedStructure
+              backgroundColor="#07172c"
+              initialZoom={2.5}
+              validatedStructureKey={referenceSnapshot.canonicalSmiles}
+              userMode="student"
+              showAdvancedControls={false}
+              showMeasurementControls={false}
+              testIdNamespace="scanner-comparison-reference"
+            />
+          </div>
+          <details className="scanner-comparison-source-details">
+            <summary>출처와 한계</summary>
+            <p>
+              현재 검증한 연결 구조와 일치하는 Reference 좌표입니다. 실험에서 직접 측정한
+              구조나 정답 모형이 아니며, 사진이나 Physical Model의 거리에서 만든 자료도 아닙니다.
+            </p>
+          </details>
         </article>
       </div>
 
@@ -289,11 +318,14 @@ export function PhysicalReferenceComparisonStage({
       >
         <h3 id="scanner-structure-coach-title">Structure Coach · 관찰 도우미</h3>
         <p>정답을 대신 말하지 않습니다. 두 화면에서 직접 확인한 내용을 근거로 적어 보세요.</p>
-        <ul>
-          {coachPrompts.map((prompt, index) => (
-            <li key={`${identityId}-${index}`}>{prompt}</li>
-          ))}
-        </ul>
+        <details className="scanner-coach-details">
+          <summary>관찰 도움말 보기</summary>
+          <ul>
+            {coachPrompts.map((prompt, index) => (
+              <li key={`${identityId}-${index}`}>{prompt}</li>
+            ))}
+          </ul>
+        </details>
 
         <div className="scanner-comparison-inputs">
           <label>
